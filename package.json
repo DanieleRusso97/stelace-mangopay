@@ -1,5 +1,5 @@
 {
-  "name": "stelace-stripe",
+  "name": "stelace-mangopay",
   "version": "0.1.0",
   "description": "Stelace server wrapper plugin for Stripe",
   "license": "GPL-3.0",
@@ -35,7 +35,7 @@
     "ngrok": "^3.2.7",
     "shx": "^0.3.2",
     "sql-fixtures": "^1.0.0",
-    "stelace-server": "git+ssh://git@github.com/stelace/stelace.git",
+    "stelace-server": "https://github.com/stelace/stelace.git",
     "supertest": "^4.0.2",
     "tap-xunit": "^2.4.1"
   },

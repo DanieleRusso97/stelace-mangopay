@@ -1,5 +1,5 @@
 const validationVersions = [
-  require('./stripe')
+  require('./mangopay')
 ]
 
 module.exports = validationVersions
