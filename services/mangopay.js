@@ -42,7 +42,7 @@ module.exports = function createService(deps) {
 			userId: currentUserId,
 		});
 
-		console.log(user);
+		// console.log(user);
 
 		const mangopayUserInfo = {
 			payer:
@@ -52,7 +52,7 @@ module.exports = function createService(deps) {
 				parseInt(user.platformData._private.mangoPay.owner.id) ||
 				undefined,
 		};
-		console.log('mango pay user info: ', mangopayUserInfo);
+		// console.log('mango pay user info: ', mangopayUserInfo);
 
 		const mangopay = new Mangopay({
 			clientId: CLIENT_ID,
@@ -81,7 +81,7 @@ module.exports = function createService(deps) {
 			'Users.getEMoney',
 		];
 
-		console.log('REQ: ', req);
+		// console.log('REQ: ', req);
 
 		if (methodAllowed.includes(method)) {
 			if (Array.isArray(args)) {
