@@ -1,5 +1,3 @@
-const validationVersions = [
-  require('./mangopay')
-]
+const validationVersions = [require('./mangopay')];
 
-module.exports = validationVersions
+module.exports = validationVersions;

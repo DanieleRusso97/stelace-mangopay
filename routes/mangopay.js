@@ -12,10 +12,7 @@ function init(server, { middlewares, helpers } = {}) {
 			name: 'mangopay.pluginRequest',
 			path: '/integrations/mangopay/request',
 		},
-		checkPermissions([
-			'integrations:read_write:mangopay',
-			'integrations:read_write:all', // does not currently exist
-		]),
+		checkPermissions(['integrations:read_write:mangopay', 'token:check']),
 		wrapAction(async (req, res) => {
 			let ctx = getRequestContext(req);
 
@@ -52,12 +49,18 @@ function start(startParams) {
 	} = deps;
 
 	const configRequester = getRequester({
-		name: 'Stripe service > Config Requester',
+		name: 'Mangopay service > Config Requester',
 		key: 'config',
+	});
+
+	const userRequester = getRequester({
+		name: 'Mangopay service > User Requester',
+		key: 'user',
 	});
 
 	Object.assign(deps, {
 		configRequester,
+		userRequester,
 	});
 
 	mangopay = createService(deps);

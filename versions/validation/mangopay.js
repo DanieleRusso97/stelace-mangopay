@@ -1,36 +1,36 @@
-module.exports = function createValidation (deps) {
-  const {
-    utils: {
-      validation: { Joi }
-    }
-  } = deps
+module.exports = function createValidation(deps) {
+	const {
+		utils: {
+			validation: { Joi },
+		},
+	} = deps;
 
-  const schemas = {}
+	const schemas = {};
 
-  // ////////// //
-  // 2019-05-20 //
-  // ////////// //
-  schemas['2019-05-20'] = {}
-  schemas['2019-05-20'].request = {
-    body: Joi.object().keys({
-      method: Joi.string().required(),
-      args: Joi.array().items().single()
-    })
-  }
-  schemas['2019-05-20'].webhook = null
+	// ////////// //
+	// 2019-05-20 //
+	// ////////// //
+	schemas['2019-05-20'] = {};
+	schemas['2019-05-20'].request = {
+		body: Joi.object().keys({
+			method: Joi.string().required(),
+			args: Joi.array().items().single(),
+		}),
+	};
+	schemas['2019-05-20'].webhook = null;
 
-  const validationVersions = {
-    '2019-05-20': [
-      {
-        target: 'mangopay.pluginRequest',
-        schema: schemas['2019-05-20'].request
-      },
-      {
-        target: 'mangopay.webhooks',
-        schema: schemas['2019-05-20'].webhook
-      }
-    ]
-  }
+	const validationVersions = {
+		'2019-05-20': [
+			{
+				target: 'mangopay.pluginRequest',
+				schema: schemas['2019-05-20'].request,
+			},
+			{
+				target: 'mangopay.webhooks',
+				schema: schemas['2019-05-20'].webhook,
+			},
+		],
+	};
 
-  return validationVersions
-}
+	return validationVersions;
+};

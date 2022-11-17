@@ -8,6 +8,8 @@ module.exports = function createService(deps) {
 		createError,
 		communication: { stelaceApiRequest },
 
+		getCurrentUserId,
+		userRequester,
 		configRequester,
 	} = deps;
 
@@ -33,6 +35,25 @@ module.exports = function createService(deps) {
 			throw createError(403, 'Mangopay secret API key not configured');
 		}
 
+		const currentUserId = getCurrentUserId(req);
+
+		const user = await userRequester.communicate(req)({
+			type: 'read',
+			userId: currentUserId,
+		});
+
+		console.log(user);
+
+		const mangopayUserInfo = {
+			payer:
+				parseInt(user.platformData._private.mangoPay.payer.id) ||
+				undefined,
+			owner:
+				parseInt(user.platformData._private.mangoPay.owner.id) ||
+				undefined,
+		};
+		console.log('mango pay user info: ', mangopayUserInfo);
+
 		const mangopay = new Mangopay({
 			clientId: CLIENT_ID,
 			clientApiKey: KEY,
@@ -44,6 +65,39 @@ module.exports = function createService(deps) {
 			throw createError(400, 'Mangopay method not found', {
 				public: { method },
 			});
+		}
+
+		// Only some methods are available to every user and they can operate only with their userId
+
+		// Everyone of these methods have userId as first parameters, so args[0] will be userId
+		const methodAllowed = [
+			'Users.createBankAccount',
+			'Users.getBankAccount',
+			'Users.createKycDocument',
+			'Users.getKycDocuments',
+			'Users.updateKycDocument',
+			'Users.createKycPage',
+			'Users.createKycPageFromFile',
+			'Users.getEMoney',
+		];
+
+		console.log('REQ: ', req);
+
+		if (methodAllowed.includes(method)) {
+			if (Array.isArray(args)) {
+				if (
+					(args[0] !== mangopayUserInfo.payer &&
+						args[0] !== mangopayUserInfo.owner) ||
+					(typeof mangopayUserInfo.payer === 'undefined' &&
+						typeof mangopayUserInfo.owner === 'undefined')
+				) {
+					throw createError(404, 'Mangopay user not found');
+				}
+			} else throw createError(400, 'Mangopay args not acceptable');
+		} else if (
+			!req._matchedPermissions['integrations:read_write:mangopay']
+		) {
+			throw createError(403, 'Not allowed');
 		}
 
 		try {
@@ -84,24 +138,24 @@ module.exports = function createService(deps) {
 		};
 
 		// const privateConfig = await configRequester.communicate(req)({
-		// 	type: '_getConfig',
-		// 	access: 'private',
+		// type: '_getConfig',
+		// access: 'private',
 		// });
 		//
 		// const { KEY, CLIENT_ID, URI } = _.get(
-		// 	privateConfig,
-		// 	'stelace.integrations.mangopay',
-		// 	{},
+		// privateConfig,
+		// 'stelace.integrations.mangopay',
+		// {},
 		// );
 		// if (!KEY) {
-		// 	throw createError(403, 'Mangopay API key not configured');
+		// throw createError(403, 'Mangopay API key not configured');
 		// }
 		//
 		// const mangopay = new Mangopay({
-		// 	clientId: CLIENT_ID,
-		// 	clientApiKey: KEY,
-		// 	// Set the right production API url. If testing, omit the property since it defaults to sandbox URL
-		// 	baseUrl: URI,
+		// clientId: CLIENT_ID,
+		// clientApiKey: KEY,
+		// // Set the right production API url. If testing, omit the property since it defaults to sandbox URL
+		// baseUrl: URI,
 		// });
 
 		const event = {
@@ -114,13 +168,13 @@ module.exports = function createService(deps) {
 		// Verify Mangopay webhook signature
 		// https://mangopay.com/docs/webhooks/signatures
 		// try {
-		// 	event = mangopay.webhooks.constructEvent(
-		// 		rawBody,
-		// 		mangopaySignature,
-		// 		webhookSecret,
-		// 	);
+		// event = mangopay.webhooks.constructEvent(
+		// rawBody,
+		// mangopaySignature,
+		// webhookSecret,
+		// );
 		// } catch (err) {
-		// 	throw createError(403);
+		// throw createError(403);
 		// }
 
 		// prefix prevents overlapping with other event types
