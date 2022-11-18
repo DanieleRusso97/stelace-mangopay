@@ -35,25 +35,6 @@ module.exports = function createService(deps) {
 			throw createError(403, 'Mangopay secret API key not configured');
 		}
 
-		const currentUserId = getCurrentUserId(req);
-
-		const user = await userRequester.communicate(req)({
-			type: 'read',
-			userId: currentUserId,
-		});
-
-		// console.log(user);
-
-		const mangopayUserInfo = {
-			payer:
-				parseInt(user.platformData._private.mangoPay.payer.id) ||
-				undefined,
-			owner:
-				parseInt(user.platformData._private.mangoPay.owner.id) ||
-				undefined,
-		};
-		// console.log('mango pay user info: ', mangopayUserInfo);
-
 		const mangopay = new Mangopay({
 			clientId: CLIENT_ID,
 			clientApiKey: KEY,
@@ -81,19 +62,42 @@ module.exports = function createService(deps) {
 			'Users.getEMoney',
 		];
 
-		// console.log('REQ: ', req);
+		const currentUserId = getCurrentUserId(req);
 
-		if (methodAllowed.includes(method)) {
-			if (Array.isArray(args)) {
-				if (
-					(args[0] !== mangopayUserInfo.payer &&
-						args[0] !== mangopayUserInfo.owner) ||
-					(typeof mangopayUserInfo.payer === 'undefined' &&
-						typeof mangopayUserInfo.owner === 'undefined')
-				) {
-					throw createError(404, 'Mangopay user not found');
-				}
-			} else throw createError(400, 'Mangopay args not acceptable');
+		console.log(currentUserId);
+
+		if (currentUserId) {
+			const user = await userRequester.communicate(req)({
+				type: 'read',
+				userId: currentUserId,
+			});
+
+			const mangopayUserInfo = {
+				payer:
+					parseInt(user.platformData._private.mangoPay.payer.id) ||
+					undefined,
+				owner:
+					parseInt(user.platformData._private.mangoPay.owner.id) ||
+					undefined,
+			};
+			console.log('mango pay user info: ', mangopayUserInfo);
+
+			if (methodAllowed.includes(method)) {
+				if (Array.isArray(args)) {
+					if (
+						(args[0] !== mangopayUserInfo.payer &&
+							args[0] !== mangopayUserInfo.owner) ||
+						(typeof mangopayUserInfo.payer === 'undefined' &&
+							typeof mangopayUserInfo.owner === 'undefined')
+					) {
+						throw createError(404, 'Mangopay user not found');
+					}
+				} else throw createError(400, 'Mangopay args not acceptable');
+			} else if (
+				!req._matchedPermissions['integrations:read_write:mangopay']
+			) {
+				throw createError(403, 'Not allowed');
+			}
 		} else if (
 			!req._matchedPermissions['integrations:read_write:mangopay']
 		) {
@@ -102,6 +106,7 @@ module.exports = function createService(deps) {
 
 		try {
 			// awaiting to handle error in catch block
+			console.log(args);
 			return await _.invoke(mangopay, method, ...args); // promise
 		} catch (err) {
 			const errorMessage = 'Mangopay error';
