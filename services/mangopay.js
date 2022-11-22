@@ -60,6 +60,12 @@ module.exports = function createService(deps) {
 			'Users.createKycPage',
 			'Users.createKycPageFromFile',
 			'Users.getEMoney',
+			'UboDeclarations.create',
+			'UboDeclarations.createUbo',
+			'UboDeclarations.get',
+			'UboDeclarations.getUbo',
+			'UboDeclarations.update',
+			'UboDeclarations.updateUbo',
 		];
 
 		const currentUserId = getCurrentUserId(req);
