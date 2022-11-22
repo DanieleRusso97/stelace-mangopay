@@ -63,6 +63,7 @@ module.exports = function createService(deps) {
 			'UboDeclarations.create',
 			'UboDeclarations.createUbo',
 			'UboDeclarations.get',
+			'UboDeclarations.getAll',
 			'UboDeclarations.getUbo',
 			'UboDeclarations.update',
 			'UboDeclarations.updateUbo',
