@@ -111,13 +111,15 @@ module.exports = function createService(deps) {
 						throw createError(400, 'Mangopay args not acceptable');
 					}
 				} else if (
-					method === 'Cards.update' ||
 					method === 'Cards.get' ||
+					method === 'Cards.update' ||
 					method === 'Cards.getTransactions' ||
 					method === 'Cards.getPreAuthorizations'
 				) {
 					if (args[0]) {
-						const card = await mangopay.Cards.get(args[0]);
+						const cardId =
+							method === 'Cards.update' ? args[0].Id : args[0];
+						const card = await mangopay.Cards.get(cardId);
 						if (
 							!card.UserId ||
 							(Number(card.UserId) !== mangopayUserInfo.payer &&
