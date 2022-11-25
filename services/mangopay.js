@@ -69,6 +69,10 @@ module.exports = function createService(deps) {
 			'UboDeclarations.updateUbo',
 			'CardRegistrations.create',
 			'CardRegistrations.update',
+			'Cards.get',
+			'Cards.update',
+			'Cards.getTransactions',
+			'Cards.getPreAuthorizations',
 		];
 
 		const currentUserId = getCurrentUserId(req);
@@ -100,6 +104,24 @@ module.exports = function createService(deps) {
 						if (
 							args[0].UserId !== mangopayUserInfo.payer &&
 							args[0].UserId !== mangopayUserInfo.owner
+						) {
+							throw createError(403, 'Not allowed');
+						}
+					} else {
+						throw createError(400, 'Mangopay args not acceptable');
+					}
+				} else if (
+					method === 'Cards.update' ||
+					method === 'Cards.get' ||
+					method === 'Cards.getTransactions' ||
+					method === 'Cards.getPreAuthorizations'
+				) {
+					if (args[0]) {
+						const card = await mangopay.Cards.get(args[0]);
+						if (
+							!card.UserId ||
+							(card.UserId !== mangopayUserInfo.payer &&
+								card.UserId !== mangopayUserInfo.owner)
 						) {
 							throw createError(403, 'Not allowed');
 						}
