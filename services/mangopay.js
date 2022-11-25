@@ -67,6 +67,8 @@ module.exports = function createService(deps) {
 			'UboDeclarations.getUbo',
 			'UboDeclarations.update',
 			'UboDeclarations.updateUbo',
+			'CardRegistrations.create',
+			'CardRegistrations.update',
 		];
 
 		const currentUserId = getCurrentUserId(req);
@@ -90,16 +92,34 @@ module.exports = function createService(deps) {
 			console.log('mango pay user info: ', mangopayUserInfo);
 
 			if (methodAllowed.includes(method)) {
-				if (Array.isArray(args)) {
-					if (
-						(args[0] !== mangopayUserInfo.payer &&
-							args[0] !== mangopayUserInfo.owner) ||
-						(typeof mangopayUserInfo.payer === 'undefined' &&
-							typeof mangopayUserInfo.owner === 'undefined')
-					) {
-						throw createError(404, 'Mangopay user not found');
+				if (
+					method === 'CardRegistrations.create' ||
+					method === 'CardRegistrations.update'
+				) {
+					if (args[0].UserId) {
+						if (
+							args[0].UserId !== mangopayUserInfo.payer &&
+							args[0].UserId !== mangopayUserInfo.owner
+						) {
+							throw createError(403, 'Not allowed');
+						}
+					} else {
+						throw createError(400, 'Mangopay args not acceptable');
 					}
-				} else throw createError(400, 'Mangopay args not acceptable');
+				} else {
+					if (Array.isArray(args)) {
+						if (
+							(args[0] !== mangopayUserInfo.payer &&
+								args[0] !== mangopayUserInfo.owner) ||
+							(typeof mangopayUserInfo.payer === 'undefined' &&
+								typeof mangopayUserInfo.owner === 'undefined')
+						) {
+							throw createError(404, 'Mangopay user not found');
+						}
+					} else {
+						throw createError(400, 'Mangopay args not acceptable');
+					}
+				}
 			} else if (
 				!req._matchedPermissions['integrations:read_write:mangopay']
 			) {
