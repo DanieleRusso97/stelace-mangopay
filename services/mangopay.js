@@ -120,8 +120,8 @@ module.exports = function createService(deps) {
 						const card = await mangopay.Cards.get(args[0]);
 						if (
 							!card.UserId ||
-							(card.UserId !== mangopayUserInfo.payer &&
-								card.UserId !== mangopayUserInfo.owner)
+							(Number(card.UserId) !== mangopayUserInfo.payer &&
+								Number(card.UserId) !== mangopayUserInfo.owner)
 						) {
 							throw createError(403, 'Not allowed');
 						}
