@@ -25,8 +25,32 @@ function init(server, { middlewares, helpers } = {}) {
 
 	server.post(
 		{
+			name: 'mangopay.paymentHandler',
+			path: '/integrations/mangopay/payment',
+		},
+		checkPermissions([
+			'integrations:read_write:mangopay',
+			'transaction:create',
+		]),
+		wrapAction(async (req, res) => {
+			let ctx = getRequestContext(req);
+
+			const { args, method } = req.body;
+			ctx = Object.assign({}, ctx, {
+				args,
+				method,
+				rawHeaders: req.headers,
+			});
+
+			return mangopay.paymentHandler(ctx);
+		}),
+	);
+
+	server.get(
+		{
 			name: 'mangopay.webhooks',
 			path: '/integrations/mangopay/webhooks/:publicPlatformId',
+			manualAuth: true,
 		},
 		wrapAction(async (req, res) => {
 			const { publicPlatformId } = req.params;
@@ -58,9 +82,21 @@ function start(startParams) {
 		key: 'user',
 	});
 
+	const orderRequester = getRequester({
+		name: 'Mangopay service > Order Requester',
+		key: 'order',
+	});
+
+	const transactionRequester = getRequester({
+		name: 'Mangopay service > Transaction Requester',
+		key: 'transaction',
+	});
+
 	Object.assign(deps, {
 		configRequester,
 		userRequester,
+		orderRequester,
+		transactionRequester,
 	});
 
 	mangopay = createService(deps);
