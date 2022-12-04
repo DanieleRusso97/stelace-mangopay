@@ -122,6 +122,14 @@ module.exports = function createService(deps) {
 		return order;
 	}
 
+	async function _updateTransaction(req, args) {
+		const transaction = await transactionRequester.communicate(req)({
+			type: 'update',
+			...args,
+		});
+		return transaction;
+	}
+
 	// async function _createOrderMove(req, args) {
 	// 	const order = await orderRequester.communicate(req)({
 	// 		type: 'createMove',
@@ -480,7 +488,10 @@ module.exports = function createService(deps) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
-			const transaction = await _getTransaction(req, args[0].transactionId);
+			const transaction = await _getTransaction(
+				req,
+				args[0].transactionId,
+			);
 
 			if (
 				!req._matchedPermissions['integrations:read_write:mangopay'] &&
@@ -510,7 +521,7 @@ module.exports = function createService(deps) {
 			);
 
 			const preauthorization = await mangopay.CardPreAuthorizations.get(
-				transaction.metadata.preauthorizationId,
+				transaction.platformData.preauthorizationId,
 			);
 
 			console.log(transaction);
@@ -523,53 +534,85 @@ module.exports = function createService(deps) {
 			);
 
 			// PayIn to the escrow Wallet
-			const escrowPayIn = await _invokeMangopayFn(
-				mangopay,
-				'PayIns.create',
-				[
-					{
-						PaymentType: 'PREAUTHORIZED',
-						ExecutionType: 'DIRECT',
-						CreditedUserId: userTakerId,
-						CreditedWalletId: escrowWallet.Id,
-						DebitedFunds: {
-							Currency: transaction.currency,
-							Amount: preauthorization.RemainingFunds.Amount,
-						},
-						Fees: {
-							Currency: transaction.currency,
-							Amount: transaction.platformAmount,
-						},
-						PreauthorizationId:
-							transaction.metadata.preauthorizationId,
+			let escrowPayIn;
 
-						Tag: transaction.id,
-					},
-				],
-				req,
-			);
+			if (preauthorization.RemainingFunds.Amount > 0) {
+				escrowPayIn = await _invokeMangopayFn(
+					mangopay,
+					'PayIns.create',
+					[
+						{
+							PaymentType: 'PREAUTHORIZED',
+							ExecutionType: 'DIRECT',
+							CreditedUserId: userTakerId,
+							CreditedWalletId: escrowWallet.Id,
+							DebitedFunds: {
+								Currency: transaction.currency,
+								Amount: preauthorization.RemainingFunds.Amount,
+							},
+							Fees: {
+								Currency: transaction.currency,
+								Amount: transaction.platformAmount,
+							},
+							PreauthorizationId: preauthorization.Id,
+							Tag: transaction.id,
+						},
+					],
+					req,
+				);
+			}
 
 			const orders = await _listOrders(req, {
 				transactionId: transaction.id,
 			});
-			const order = orders[0];
+
+			const order = orders.results[0];
 			const orderShippingLine = order.lines.find(
 				line => _.get(line, 'platformData.shipping', false) === true,
 			);
 
-			await mangopay.Transfers.create({
-				AuthorId: process.env.ESCROW_USER,
-				DebitedWalletId: escrowWallet.Id,
-				CreditedWalletId: shippingWallet.Id,
-				Fees: {
-					Amount: 0,
-					Currency: 'EUR',
-				},
-				DebitedFunds: {
-					Currency: 'EUR',
-					Amount: orderShippingLine.platformAmount,
-				},
-			});
+			if (
+				orderShippingLine.platformAmount >
+				_.get(transaction, 'platformData.transferToShipping', 0)
+			) {
+				const transfer = await mangopay.Transfers.create({
+					AuthorId: process.env.ESCROW_USER,
+					DebitedWalletId: escrowWallet.Id,
+					CreditedWalletId: shippingWallet.Id,
+					Fees: {
+						Amount: 0,
+						Currency: 'EUR',
+					},
+					DebitedFunds: {
+						Currency: 'EUR',
+						Amount:
+							orderShippingLine.platformAmount -
+							_.get(
+								transaction,
+								'platformData.transferToShipping',
+								0,
+							),
+					},
+				});
+
+				const transferToShipping = _.get(
+					transfer,
+					'CreditedFunds.Amount',
+					0,
+				);
+
+				await _updateTransaction(req, {
+					transactionId: transaction.id,
+					platformData: {
+						transferToShipping:
+							_.get(
+								transaction,
+								'platformData.transferToShipping',
+								0,
+							) + transferToShipping,
+					},
+				});
+			}
 
 			return await _invokeMangopayFn(
 				mangopay,

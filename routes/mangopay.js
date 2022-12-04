@@ -4,7 +4,7 @@ let mangopay;
 let deps = {};
 
 function init(server, { middlewares, helpers } = {}) {
-	const { checkPermissions } = middlewares;
+	const { checkPermissions, restifyAuthorizationParser } = middlewares;
 	const { wrapAction, getRequestContext } = helpers;
 
 	server.post(
@@ -52,6 +52,7 @@ function init(server, { middlewares, helpers } = {}) {
 			path: '/integrations/mangopay/webhooks/:publicPlatformId',
 			manualAuth: true,
 		},
+		restifyAuthorizationParser,
 		wrapAction(async (req, res) => {
 			const { publicPlatformId } = req.params;
 
