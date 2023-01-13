@@ -11,7 +11,7 @@ module.exports = function createService(deps) {
 		getCurrentUserId,
 		userRequester,
 		configRequester,
-		orderRequester,
+		// orderRequester,
 		transactionRequester,
 	} = deps;
 
@@ -86,41 +86,41 @@ module.exports = function createService(deps) {
 		return user;
 	}
 
-	async function _getOrder(req, orderId) {
-		const order = await orderRequester.communicate(req)({
-			type: 'read',
-			orderId: orderId,
-		});
-		return order;
-	}
+	// async function _getOrder(req, orderId) {
+	// 	const order = await orderRequester.communicate(req)({
+	// 		type: 'read',
+	// 		orderId: orderId,
+	// 	});
+	// 	return order;
+	// }
 
-	async function _listOrders(req, args) {
-		const order = await orderRequester.communicate(req)({
-			type: 'list',
-			page: 1,
-			nbResultsPerPage: 1,
-			orderBy: 'createdDate',
-			order: 'desc',
-			...args,
-		});
-		return order;
-	}
+	// async function _listOrders(req, args) {
+	// 	const order = await orderRequester.communicate(req)({
+	// 		type: 'list',
+	// 		page: 1,
+	// 		nbResultsPerPage: 1,
+	// 		orderBy: 'createdDate',
+	// 		order: 'desc',
+	// 		...args,
+	// 	});
+	// 	return order;
+	// }
 
-	async function _createOrder(req, args) {
-		const order = await orderRequester.communicate(req)({
-			type: 'create',
-			...args,
-		});
-		return order;
-	}
+	// async function _createOrder(req, args) {
+	// 	const order = await orderRequester.communicate(req)({
+	// 		type: 'create',
+	// 		...args,
+	// 	});
+	// 	return order;
+	// }
 
-	async function _createOrderLine(req, args) {
-		const order = await orderRequester.communicate(req)({
-			type: 'createLine',
-			...args,
-		});
-		return order;
-	}
+	// async function _createOrderLine(req, args) {
+	// 	const order = await orderRequester.communicate(req)({
+	// 		type: 'createLine',
+	// 		...args,
+	// 	});
+	// 	return order;
+	// }
 
 	async function _updateTransaction(req, args) {
 		const transaction = await transactionRequester.communicate(req)({
@@ -227,6 +227,8 @@ module.exports = function createService(deps) {
 			'Cards.getTransactions',
 			'Cards.getPreAuthorizations',
 			'CardPreAuthorizations.get',
+			'Wallets.get',
+			'PayIns.get',
 		];
 
 		if (!req._matchedPermissions['integrations:read_write:mangopay']) {
@@ -294,6 +296,24 @@ module.exports = function createService(deps) {
 								'Preauthorization not found',
 							);
 						}
+					} else if (method === 'Wallets.get') {
+						const wallet = await mangopay.Wallets.get(args[0]);
+						const walletOwner = wallet.Owners[0];
+						if (
+							Number(walletOwner) !== mangopayUserInfo.payer &&
+							Number(walletOwner) !== mangopayUserInfo.owner
+						) {
+							throw createError(403, 'Not allowed');
+						}
+					} else if (method === 'PayIns.get') {
+						const payin = await mangopay.PayIns.get(args[0]);
+						const payinOwner = payin.AuthorId;
+						if (
+							Number(payinOwner) !== mangopayUserInfo.payer &&
+							Number(payinOwner) !== mangopayUserInfo.owner
+						) {
+							throw createError(403, 'Not allowed');
+						}
 					} else {
 						if (Array.isArray(args)) {
 							if (
@@ -327,6 +347,53 @@ module.exports = function createService(deps) {
 		return await _invokeMangopayFn(mangopay, method, args, req);
 	}
 
+	async function _getShippingFare(args, req) {
+		/*
+				args = {
+					packagingSize: 'SMALL' | 'MEDIUM' | 'LARGE';
+					enabled?: boolean;
+					courier?: string;
+				}
+			*/
+		const config = await _getConfig(req);
+		const shippingFares = _.get(
+			config,
+			`custom.shipping.${args.courier || 'default'}`,
+			{},
+		);
+
+		let shippingFare;
+
+		if (!args.packagingSize) {
+			throw createError(404, 'Packaging size not founded');
+		}
+
+		if (args.enabled) {
+			const shippingFareFinded = shippingFares.find(
+				fare => fare.size === args.packagingSize,
+			);
+			if (shippingFareFinded) {
+				shippingFare = shippingFareFinded.price;
+			} else throw createError(404, 'Shipping fare not founded');
+		} else shippingFare = 0;
+
+		return shippingFare;
+	}
+
+	async function _getEscrowWallets(mangopay, req) {
+		const escrowWallets = await mangopay.Users.getWallets(
+			process.env.ESCROW_USER,
+		);
+		const escrowWallet = escrowWallets.find(wallet =>
+			wallet.Description.toLowerCase().includes('escrow'),
+		);
+		const shippingWallet = escrowWallets.find(wallet =>
+			wallet.Description.toLowerCase().includes('shipping'),
+		);
+
+		return { escrow: escrowWallet, shipping: shippingWallet };
+	}
+
 	async function paymentHandler(req) {
 		const { method, args = [{}], rawHeaders } = req;
 
@@ -334,10 +401,10 @@ module.exports = function createService(deps) {
 		const mangopayUserInfo = await _userMangopayIds(req);
 
 		const methods = [
-			'Custom.preauth',
-			'Custom.preauthPayIn',
+			'Custom.refundPayIns',
 			'Custom.payIn',
 			'Custom.payOut',
+			'Custom.transferToShipping',
 		];
 
 		if (!methods.includes(method)) {
@@ -348,7 +415,7 @@ module.exports = function createService(deps) {
 
 		const currentUserId = getCurrentUserId(req);
 
-		if (method === 'Custom.preauth') {
+		if (method === 'Custom.payIn') {
 			/*
 				args = [{
 					courier?: string,
@@ -379,74 +446,58 @@ module.exports = function createService(deps) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
-			if (
-				transaction.takerId === currentUserId &&
-				(transaction.status === 'draft' ||
-					transaction.status === 'failedPreauth')
-			) {
-				const config = await _getConfig(req);
-				const shippingFares = _.get(
-					config,
-					`custom.shipping.${args[0].courier || 'default'}`,
-					{},
+			if (transaction.status !== 'draft') {
+				throw createError(400, 'Wrong transaction status');
+			}
+
+			if (transaction.takerId === currentUserId) {
+				const shippingFare = await _getShippingFare(
+					{
+						courier: args[0].courier,
+						enabled: transaction.assetType.isDefault,
+						packagingSize: _.get(
+							transaction,
+							'assetSnapshot.metadata.packagingSize',
+							undefined,
+						),
+					},
+					req,
 				);
 
-				let shippingFare;
-
-				if (transaction.assetType.isDefault) {
-					const shippingFareFinded = shippingFares.find(
-						fare =>
-							fare.size ===
-							_.get(
-								transaction,
-								'assetSnapshot.metadata.packagingSize',
-								undefined,
-							),
-					);
-
-					if (shippingFareFinded) {
-						shippingFare = shippingFareFinded.price;
-					} else throw createError(404, 'Shipping fare not founded');
-				} else shippingFare = 0;
-
-				let orderId;
-				const listOrders = await _listOrders(req, {
+				await _updateTransaction(req, {
 					transactionId: transaction.id,
+					platformData: {
+						shippingFare: shippingFare,
+						transferToShipping: shippingFare,
+					},
 				});
 
-				if (!Array.isArray(listOrders) || listOrders.length === 0) {
-					const createOrder = await _createOrder(req, {
-						transactionIds: args[0].transactionId,
-					});
+				const userTaker = await _getUser(req, transaction.takerId);
 
-					if (shippingFare > 0) {
-						await _createOrderLine(req, {
-							orderId: createOrder.id,
-							transactionId: transaction.id,
-							payerId: transaction.takerId,
-							payerAmount: shippingFare,
-							receiverId: null,
-							receiverAmount: null,
-							platformAmount: shippingFare,
-							currency: transaction.currency,
-							platformData: {
-								shipping: true,
-							},
-						});
-					}
+				const userTakerId = _.get(
+					userTaker,
+					'platformData._private.mangoPay.payer.id',
+					undefined,
+				);
 
-					orderId = createOrder.id;
-				} else {
-					orderId = listOrders[0].id;
-				}
+				const { escrow: escrowWallet } = await _getEscrowWallets(
+					mangopay,
+					req,
+				);
 
-				const orderUpdated = await _getOrder(req, orderId);
+				const totalAmount = transaction.takerAmount + shippingFare;
 
 				const paymentData = {
 					AuthorId: mangopayUserInfo.payer,
+					CreditedUserId: userTakerId,
+					CreditedWalletId: escrowWallet.Id,
 					DebitedFunds: {
 						Currency: transaction.currency,
-						Amount: orderUpdated.amountRemaining,
+						Amount: totalAmount,
+					},
+					Fees: {
+						Currency: transaction.currency,
+						Amount: transaction.platformAmount,
 					},
 					Tag: transaction.id,
 					Culture: 'IT',
@@ -471,155 +522,84 @@ module.exports = function createService(deps) {
 
 				return await _invokeMangopayFn(
 					mangopay,
-					'CardPreAuthorizations.create',
+					'PayIns.create',
 					[paymentData],
 					req,
 				);
 			} else {
 				throw createError(403, 'Not allowed');
 			}
-		} else if (method === 'Custom.preauthPayIn') {
+		} else if (method === 'Custom.refundPayIns') {
+			/*
+				args = [{
+					payinIds: string[];
+				}]
+			*/
+			if (!req._matchedPermissions['integrations:read_write:mangopay']) {
+				throw createError(403, 'Not allowed');
+			}
+
+			const payinIds = _.get(args[0], 'payinIds', []);
+
+			if (_.isEmpty(payinIds)) {
+				throw createError(400, 'Some mangopay args missing');
+			}
+
+			const payinRefunds = [];
+
+			for (const payinId of payinIds) {
+				const payinRefund = await mangopay.PayIns.createRefund(
+					payinId,
+					{
+						AuthorId: process.env.ESCROW_USER,
+					},
+				);
+				payinRefunds.push(payinRefund);
+			}
+
+			return payinRefunds;
+		} else if (method === 'Custom.transferToShipping') {
 			/*
 				args = [{
 					transactionId: string;
 				}]
 			*/
-			if (!_.get(args[0], 'transactionId', undefined)) {
-				throw createError(400, 'Some mangopay args missing');
-			}
-
 			const transaction = await _getTransaction(
 				req,
 				args[0].transactionId,
 			);
 
-			if (
-				!req._matchedPermissions['integrations:read_write:mangopay'] &&
-				transaction.takerId !== currentUserId &&
-				transaction.ownerId !== currentUserId
-			) {
-				throw createError(403, 'Not allowed');
-			}
-
-			if (
-				transaction.status !== 'pending-payment' &&
-				transaction.status !== 'failedPayin'
-			) {
-				throw createError(500, 'Wrong transaction status');
-			}
-
-			const escrowWallets = await mangopay.Users.getWallets(
-				process.env.ESCROW_USER,
+			const wallets = await _getEscrowWallets(mangopay, req);
+			const transferToShipping = _.get(
+				transaction,
+				'platformData.transferToShipping',
+				0,
 			);
 
-			const escrowWallet = escrowWallets.find(wallet =>
-				wallet.Description.toLowerCase().includes('escrow'),
-			);
-
-			const shippingWallet = escrowWallets.find(wallet =>
-				wallet.Description.toLowerCase().includes('shipping'),
-			);
-
-			const preauthorization = await mangopay.CardPreAuthorizations.get(
-				transaction.platformData.preauthorizationId,
-			);
-
-			console.log(transaction);
-			const userTaker = await _getUser(req, transaction.takerId);
-
-			const userTakerId = _.get(
-				userTaker,
-				'platformData._private.mangoPay.payer.id',
-				undefined,
-			);
-
-			// PayIn to the escrow Wallet
-			let escrowPayIn;
-
-			if (preauthorization.RemainingFunds.Amount > 0) {
-				escrowPayIn = await _invokeMangopayFn(
-					mangopay,
-					'PayIns.create',
-					[
-						{
-							PaymentType: 'PREAUTHORIZED',
-							ExecutionType: 'DIRECT',
-							CreditedUserId: userTakerId,
-							CreditedWalletId: escrowWallet.Id,
-							DebitedFunds: {
-								Currency: transaction.currency,
-								Amount: preauthorization.RemainingFunds.Amount,
-							},
-							Fees: {
-								Currency: transaction.currency,
-								Amount: transaction.platformAmount,
-							},
-							PreauthorizationId: preauthorization.Id,
-							Tag: transaction.id,
-						},
-					],
-					req,
-				);
-			}
-
-			const orders = await _listOrders(req, {
-				transactionId: transaction.id,
+			const transfer = await mangopay.Transfers.create({
+				AuthorId: process.env.ESCROW_USER,
+				DebitedWalletId: wallets.escrow.Id,
+				CreditedWalletId: wallets.shipping.Id,
+				Fees: {
+					Amount: 0,
+					Currency: 'EUR',
+				},
+				DebitedFunds: {
+					Currency: 'EUR',
+					Amount: transferToShipping,
+				},
 			});
 
-			const order = orders.results[0];
-			const orderShippingLine = order.lines.find(
-				line => _.get(line, 'platformData.shipping', false) === true,
-			);
+			const amountTransfered = _.get(transfer, 'CreditedFunds.Amount', 0);
 
-			if (
-				orderShippingLine.platformAmount >
-				_.get(transaction, 'platformData.transferToShipping', 0)
-			) {
-				const transfer = await mangopay.Transfers.create({
-					AuthorId: process.env.ESCROW_USER,
-					DebitedWalletId: escrowWallet.Id,
-					CreditedWalletId: shippingWallet.Id,
-					Fees: {
-						Amount: 0,
-						Currency: 'EUR',
-					},
-					DebitedFunds: {
-						Currency: 'EUR',
-						Amount:
-							orderShippingLine.platformAmount -
-							_.get(
-								transaction,
-								'platformData.transferToShipping',
-								0,
-							),
-					},
-				});
+			await _updateTransaction(req, {
+				transactionId: transaction.id,
+				platformData: {
+					transferToShipping: transferToShipping - amountTransfered,
+				},
+			});
 
-				const transferToShipping = _.get(
-					transfer,
-					'CreditedFunds.Amount',
-					0,
-				);
-
-				await _updateTransaction(req, {
-					transactionId: transaction.id,
-					platformData: {
-						transferToShipping:
-							_.get(
-								transaction,
-								'platformData.transferToShipping',
-								0,
-							) + transferToShipping,
-					},
-				});
-			}
-
-			return await _invokeMangopayFn(
-				mangopay,
-				'PayIns.get',
-				[escrowPayIn.Id],
-				req,
-			);
+			return await _getTransaction(req, args[0].transactionId);
 		}
 	}
 
@@ -708,7 +688,14 @@ module.exports = function createService(deps) {
 			);
 		}
 
-		await stelaceApiRequest('/events', {
+		console.log(platformId, env, {
+			type,
+			objectId: event.id,
+			emitterId: 'mangopay',
+			metadata: event,
+		});
+
+		const evtReq = await stelaceApiRequest('/events', {
 			platformId,
 			env,
 			method: 'POST',
@@ -722,6 +709,6 @@ module.exports = function createService(deps) {
 			},
 		});
 
-		return { success: true };
+		return { success: true, req: evtReq };
 	}
 };
