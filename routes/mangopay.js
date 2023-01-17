@@ -104,9 +104,17 @@ function start(startParams) {
 }
 
 function stop() {
-	const { configRequester } = deps;
+	const {
+		configRequester,
+		userRequester,
+		orderRequester,
+		transactionRequester,
+	} = deps;
 
 	configRequester.close();
+	userRequester.close();
+	orderRequester.close();
+	transactionRequester.close();
 
 	deps = null;
 }
