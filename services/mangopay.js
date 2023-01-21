@@ -170,28 +170,26 @@ module.exports = function createService(deps) {
 
 		const currentUserId = getCurrentUserId(req);
 
-		if (!req._matchedPermissions['integrations:read_write:mangopay']) {
-			if (currentUserId) {
-				const user = await _getUser(req, currentUserId);
+		if (currentUserId) {
+			const user = await _getUser(req, currentUserId);
 
-				const payerId = _.get(
-					user,
-					'platformData._private.mangoPay.payer.id',
-					undefined,
-				);
-				const ownerId = _.get(
-					user,
-					'platformData._private.mangoPay.owner.id',
-					undefined,
-				);
+			const payerId = _.get(
+				user,
+				'platformData._private.mangoPay.payer.id',
+				undefined,
+			);
+			const ownerId = _.get(
+				user,
+				'platformData._private.mangoPay.owner.id',
+				undefined,
+			);
 
-				mangopayUserIds = {
-					payer: payerId ? parseInt(payerId) : undefined,
-					owner: ownerId ? parseInt(ownerId) : undefined,
-				};
-			} else {
-				throw createError(404, 'User not exist');
-			}
+			mangopayUserIds = {
+				payer: payerId ? parseInt(payerId) : undefined,
+				owner: ownerId ? parseInt(ownerId) : undefined,
+			};
+		} else {
+			throw createError(404, 'User not exist');
 		}
 
 		return mangopayUserIds;
