@@ -552,6 +552,8 @@ module.exports = function createService(deps) {
 					Culture: 'IT',
 					CardId: transaction.metadata.paymentMethod,
 					SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
+					PaymentType: 'CARD',
+					ExecutionType: ' DIRECT',
 					// StatementDescriptor: '',
 					IpAddress: transaction.metadata.ip,
 					BrowserInfo: {
@@ -816,6 +818,8 @@ module.exports = function createService(deps) {
 					assets: args[0].assetIds,
 					timings: args[0].timings,
 				}),
+				PaymentType: 'CARD',
+				ExecutionType: ' DIRECT',
 				Culture: 'IT',
 				CardId: paymentMethod,
 				SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
