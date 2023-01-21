@@ -11,6 +11,7 @@ module.exports = function createService(deps) {
 		getCurrentUserId,
 		userRequester,
 		configRequester,
+		assetRequester,
 		// orderRequester,
 		transactionRequester,
 	} = deps;
@@ -59,6 +60,23 @@ module.exports = function createService(deps) {
 		return transaction;
 	}
 
+	async function _getAsset(req, assetId) {
+		const asset = await assetRequester.communicate(req)({
+			type: 'read',
+			assetId: assetId,
+		});
+		return asset;
+	}
+
+	async function _updateAsset(req, assetId, args) {
+		const asset = await assetRequester.communicate(req)({
+			type: 'update',
+			assetId,
+			...args,
+		});
+		return asset;
+	}
+
 	// async function _updateTransaction(req, transactionId, args) {
 	// 	const transaction = await transactionRequester.communicate(req)({
 	// 		type: 'update',
@@ -82,6 +100,15 @@ module.exports = function createService(deps) {
 		const user = await userRequester.communicate(req)({
 			type: 'read',
 			userId: userId,
+		});
+		return user;
+	}
+
+	async function _updateUser(req, userId, args) {
+		const user = await userRequester.communicate(req)({
+			type: 'update',
+			userId,
+			...args,
 		});
 		return user;
 	}
@@ -229,6 +256,7 @@ module.exports = function createService(deps) {
 			'CardPreAuthorizations.get',
 			'Wallets.get',
 			'PayIns.get',
+			'PayOuts.create',
 		];
 
 		if (!req._matchedPermissions['integrations:read_write:mangopay']) {
@@ -313,6 +341,25 @@ module.exports = function createService(deps) {
 							Number(payinOwner) !== mangopayUserInfo.owner
 						) {
 							throw createError(403, 'Not allowed');
+						}
+					} else if (method === 'PayOuts.create') {
+						const user = await _getUser(req, getCurrentUserId(req));
+						if (args[0].AuthorId) {
+							if (
+								args[0].AuthorId !== mangopayUserInfo.owner ||
+								args[0].DebitedWalletId !==
+									_.get(
+										user,
+										'platformData._private.mangoPay.owner.walletId',
+									)
+							) {
+								throw createError(403, 'Not allowed');
+							}
+						} else {
+							throw createError(
+								400,
+								'Mangopay args not acceptable',
+							);
 						}
 					} else {
 						if (Array.isArray(args)) {
@@ -405,6 +452,10 @@ module.exports = function createService(deps) {
 			'Custom.payIn',
 			'Custom.payOut',
 			'Custom.transferToShipping',
+			'Custom.transferToOwner',
+			'Custom.sponsorProduct',
+			'Custom.updateAssetForAdv',
+			'Custom.stopAdv',
 		];
 
 		if (!methods.includes(method)) {
@@ -600,6 +651,295 @@ module.exports = function createService(deps) {
 			});
 
 			return await _getTransaction(req, args[0].transactionId);
+		} else if (method === 'Custom.transferToOwner') {
+			/*
+				args = [{
+					transactionId: string;
+				}]
+			*/
+
+			if (!req._matchedPermissions['integrations:read_write:mangopay']) {
+				throw createError(403, 'Not allowed');
+			}
+
+			const transaction = await _getTransaction(
+				req,
+				args[0].transactionId,
+			);
+
+			if (
+				_.get(transaction, 'platformData.completedTransfer', false) ===
+				true
+			) {
+				throw createError(500, 'Transfer already done');
+			}
+
+			const transferToOwner = transaction.ownerAmount || 0;
+			const wallets = await _getEscrowWallets(mangopay, req);
+			const ownerUser = await _getUser(req, transaction.ownerId);
+
+			const ownerWallet = _.get(
+				ownerUser,
+				'platformData._private.mangoPay.owner.walletId',
+			);
+
+			const transfer = await mangopay.Transfers.create({
+				AuthorId: process.env.ESCROW_USER,
+				DebitedWalletId: wallets.escrow.Id,
+				CreditedWalletId: ownerWallet,
+				Fees: {
+					Amount: 0,
+					Currency: 'EUR',
+				},
+				DebitedFunds: {
+					Currency: 'EUR',
+					Amount: transferToOwner,
+				},
+			});
+
+			const amountTransfered = _.get(transfer, 'CreditedFunds.Amount', 0);
+
+			if (amountTransfered === transferToOwner) {
+				await _updateTransaction(req, {
+					transactionId: transaction.id,
+					platformData: {
+						completedTransfer: true,
+					},
+				});
+			}
+
+			await _updateUser(req, ownerUser.id, {
+				platformData: {
+					balance: {
+						pending:
+							_.get(
+								ownerUser,
+								'platformData._private.balance.pending',
+								0,
+							) - amountTransfered,
+					},
+				},
+			});
+
+			return await _getTransaction(req, args[0].transactionId);
+		} else if (method === 'Custom.sponsorProduct') {
+			/*
+				args = [{
+					assetIds: string[],
+					timings: {
+						days: number;
+					},
+					payment: {
+						secureModeReturnUrl: string;
+					},
+					browserData: {
+						AcceptHeader?: string;
+						JavaEnabled?: boolean;
+						Language?: string;
+						ColorDepth: number;
+						ScreenHeight: number;
+						ScreenWidth: number;
+						TimeZoneOffset: number;
+						UserAgent?: string;
+						JavascriptEnabled?: boolean;
+					},
+					ip: string;
+					paymentMethod?: string;
+				}]
+			*/
+			if (
+				_.get(args[0], 'assetIds', []).length === 0 ||
+				!args[0].timings
+			) {
+				throw createError(400, 'Some mangopay args missing');
+			}
+
+			const assets = args[0].assetIds.map(
+				async assetId => await _getAsset(req, assetId),
+			);
+
+			if (
+				assets.some(asset => asset.ownerId !== currentUserId) &&
+				!req._matchedPermissions['integrations:read_write:mangopay']
+			) {
+				throw createError(403, 'Cannot sponsor article of other users');
+			}
+
+			const { escrow: escrowWallet } = await _getEscrowWallets(
+				mangopay,
+				req,
+			);
+
+			const config = await _getConfig(req);
+			const advInfo = config.custom.adv.find(advProd =>
+				_.isEqual(advProd.timings, args[0].timings),
+			);
+
+			if (!advInfo) {
+				throw createError(404, "This type of adv doesn't exist");
+			}
+
+			const price = advInfo.price * assets.length;
+
+			const user = await _getUser(req, currentUserId);
+
+			let paymentMethod;
+			if (!args[0].paymentMethod) {
+				const paymentMethods = _.get(
+					user,
+					'metadata._private.paymentMethods',
+					[],
+				);
+
+				if (paymentMethods.length === 0) {
+					throw createError(
+						404,
+						'No payment methods founded for the current user',
+					);
+				}
+
+				paymentMethod = paymentMethods[0].id;
+			} else {
+				paymentMethod = args[0].paymentMethod;
+			}
+
+			const paymentData = {
+				AuthorId: mangopayUserInfo.payer,
+				CreditedWalletId: escrowWallet.Id,
+				DebitedFunds: {
+					Currency: 'EUR',
+					Amount: 0,
+				},
+				Fees: {
+					Currency: 'EUR',
+					Amount: price,
+				},
+				Tag: JSON.stringify({
+					assets: args[0].assetIds,
+					timings: args[0].timings,
+				}),
+				Culture: 'IT',
+				CardId: paymentMethod,
+				SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
+				// StatementDescriptor: '',
+				IpAddress: args[0].ip,
+				BrowserInfo: {
+					AcceptHeader: rawHeaders.accept,
+					JavaEnabled: false,
+					JavascriptEnabled: true,
+					UserAgent: req._userAgent || rawHeaders['user-agent'],
+					Language: rawHeaders['accept-language'].substring(0, 2),
+					...args[0].browserData,
+				},
+			};
+
+			return await _invokeMangopayFn(
+				mangopay,
+				'PayIns.create',
+				[paymentData],
+				req,
+			);
+		} else if (method === 'Custom.updateAssetForAdv') {
+			/*
+				args = [{
+					assetIds: string[],
+					timings: {
+						days: number;
+					},
+					payinId: string;
+				}]
+			*/
+
+			if (!req._matchedPermissions['integrations:read_write:mangopay']) {
+				throw createError(403, 'Not allowed');
+			}
+
+			if (
+				!Array.isArray(args[0].assetIds) ||
+				args[0].assetIds.length === 0 ||
+				!args[0].timings ||
+				!args[0].payinId
+			) {
+				throw createError(400, 'Some mangopay args missing');
+			}
+
+			const assetIds = args[0].assetIds.filter(el => el);
+
+			const now = new Date().getTime();
+			const endDate = now + args[0].timings.days * 1000 * 60 * 60 * 24;
+
+			for (const assetId of assetIds) {
+				await _updateAsset(req, assetId, {
+					customAttributes: {
+						sponsored: true,
+					},
+					platformData: {
+						adv: {
+							active: true,
+							lastPayinId: args[0].payinId,
+							from: now,
+							to: endDate,
+						},
+					},
+				});
+			}
+
+			const assets = assetIds.map(
+				async assetId => await _getAsset(req, assetId),
+			);
+
+			return {
+				assets,
+				endDate,
+			};
+		} else if (method === 'Custom.stopAdv') {
+			/*
+				args = [{
+					assetIds: string[],
+				}]
+			*/
+			if (!req._matchedPermissions['integrations:read_write:mangopay']) {
+				throw createError(403, 'Not allowed');
+			}
+
+			if (
+				!Array.isArray(args[0].assetIds) ||
+				args[0].assetIds.length === 0
+			) {
+				throw createError(400, 'Some mangopay args missing');
+			}
+
+			const assetIds = args[0].assetIds.filter(el => el);
+
+			for (const assetId of assetIds) {
+				const asset = await _getAsset(req, assetId);
+
+				const now = new Date().getTime();
+
+				const endDate = _.get(asset, 'platformData.adv.to', undefined);
+
+				if (!endDate || now > endDate) {
+					await _updateAsset(req, assetId, {
+						customAttributes: {
+							sponsored: false,
+						},
+						platformData: {
+							adv: {
+								active: false,
+								lastPayinId: args[0].payinId,
+								from: now,
+								to: endDate,
+							},
+						},
+					});
+				}
+			}
+
+			const assets = assetIds.map(
+				async assetId => await _getAsset(req, assetId),
+			);
+
+			return assets;
 		}
 	}
 

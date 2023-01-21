@@ -93,11 +93,17 @@ function start(startParams) {
 		key: 'transaction',
 	});
 
+	const assetRequester = getRequester({
+		name: 'Mangopay service > Transaction Requester',
+		key: 'asset',
+	});
+
 	Object.assign(deps, {
 		configRequester,
 		userRequester,
 		orderRequester,
 		transactionRequester,
+		assetRequester,
 	});
 
 	mangopay = createService(deps);
@@ -109,12 +115,14 @@ function stop() {
 		userRequester,
 		orderRequester,
 		transactionRequester,
+		assetRequester,
 	} = deps;
 
 	configRequester.close();
 	userRequester.close();
 	orderRequester.close();
 	transactionRequester.close();
+	assetRequester.close();
 
 	deps = null;
 }
