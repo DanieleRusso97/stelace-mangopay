@@ -189,7 +189,7 @@ module.exports = function createService(deps) {
 				owner: ownerId ? parseInt(ownerId) : undefined,
 			};
 		} else {
-			throw createError(404, 'User not exist');
+			return undefined;
 		}
 
 		return mangopayUserIds;
@@ -553,7 +553,7 @@ module.exports = function createService(deps) {
 					CardId: transaction.metadata.paymentMethod,
 					SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
 					PaymentType: 'CARD',
-					ExecutionType: ' DIRECT',
+					ExecutionType: 'DIRECT',
 					// StatementDescriptor: '',
 					IpAddress: transaction.metadata.ip,
 					BrowserInfo: {
@@ -808,7 +808,7 @@ module.exports = function createService(deps) {
 				CreditedWalletId: escrowWallet.Id,
 				DebitedFunds: {
 					Currency: 'EUR',
-					Amount: 0,
+					Amount: price,
 				},
 				Fees: {
 					Currency: 'EUR',
@@ -819,7 +819,7 @@ module.exports = function createService(deps) {
 					timings: args[0].timings,
 				}),
 				PaymentType: 'CARD',
-				ExecutionType: ' DIRECT',
+				ExecutionType: 'DIRECT',
 				Culture: 'IT',
 				CardId: paymentMethod,
 				SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
