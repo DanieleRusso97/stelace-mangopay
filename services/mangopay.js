@@ -1,3 +1,4 @@
+/* eslint-disable no-mixed-spaces-and-tabs */
 const Mangopay = require('mangopay2-nodejs-sdk');
 const debug = require('debug')('stelace:integrations:mangopay');
 const _ = require('lodash');
@@ -150,10 +151,15 @@ module.exports = function createService(deps) {
 	// }
 
 	async function _updateTransaction(req, args) {
-		const transaction = await transactionRequester.communicate(req)({
-			type: 'update',
-			...args,
-		});
+		let transaction;
+		try {
+			transaction = await transactionRequester.communicate(req)({
+				type: 'update',
+				...args,
+			});
+		} catch (err) {
+			console.log(err);
+		}
 		return transaction;
 	}
 
@@ -222,12 +228,6 @@ module.exports = function createService(deps) {
 
 		const mangopay = await _mangopayAuth(req);
 
-		if (typeof _.get(mangopay, method) !== 'function') {
-			throw createError(400, 'Mangopay method not found', {
-				public: { method },
-			});
-		}
-
 		// Only some methods are available to every user and they can operate only with their userId
 		const methodAllowed = [
 			'Users.createBankAccount',
@@ -255,7 +255,17 @@ module.exports = function createService(deps) {
 			'Wallets.get',
 			'PayIns.get',
 			'PayOuts.create',
+			'Custom.createOwnerUser',
 		];
+
+		if (
+			typeof _.get(mangopay, method) !== 'function' &&
+			!methodAllowed.includes(method)
+		) {
+			throw createError(400, 'Mangopay method not found', {
+				public: { method },
+			});
+		}
 
 		if (!req._matchedPermissions['integrations:read_write:mangopay']) {
 			const mangopayUserInfo = await _userMangopayIds(req);
@@ -359,11 +369,295 @@ module.exports = function createService(deps) {
 								'Mangopay args not acceptable',
 							);
 						}
+					} else if (method === 'Custom.createOwnerUser') {
+						/*
+							args = [{
+								userId: string;
+								address: IAddress,
+								nationality: string;
+								residence: string;
+								birthDate: string;
+								phone: string;
+								vatNumber?: string,
+							}]
+						*/
+
+						const user = await _getUser(req, args[0].userId);
+						const params = args[0];
+
+						const userType =
+							_.get(user, 'platformData.userType', 'natural') ===
+							'business'
+								? 'legal'
+								: 'natural';
+
+						if (
+							!params.userId ||
+							!params.address ||
+							!params.nationality ||
+							!params.residence ||
+							!params.birthDate ||
+							!params.phone ||
+							(userType === 'legal' && !params.vatNumber)
+						) {
+							throw createError(
+								400,
+								'Missing some Mangopay args',
+							);
+						}
+
+						let mangopayUserId = _.get(
+							user,
+							'platformData._private.mangoPay.owner.id',
+							undefined,
+						);
+						let walletId = _.get(
+							user,
+							'platformData._private.mangoPay.owner.walletId',
+							undefined,
+						);
+
+						const userEmail = user.email;
+						const userId = user.id;
+						const individualInfo = {
+							firstName: user.firstname,
+							lastName: user.lastname,
+							email: user.email,
+							birthday:
+								new Date(params.birthDate).getTime() / 1000,
+							address: params.address,
+							nationality: params.nationality,
+							residence: params.residence,
+							phone: params.phone,
+						};
+						const companyInfo = {
+							vatNumber: params.vatNumber,
+						};
+
+						if (!mangopayUserId) {
+							let userParams;
+
+							if (userType === 'natural') {
+								userParams = {
+									FirstName: individualInfo.firstName,
+									LastName: individualInfo.lastName,
+									Email: userEmail,
+									Address: {
+										AddressLine1: individualInfo.address
+											.streetNumber
+											? `${individualInfo.address.address} ${individualInfo.address.streetNumber}`
+											: individualInfo.address.address,
+										City: individualInfo.address.city,
+										PostalCode: individualInfo.address.zip,
+										Country: individualInfo.address.country,
+									},
+									Birthday: individualInfo.birthday,
+									Nationality: individualInfo.nationality,
+									CountryOfResidence:
+										individualInfo.residence,
+									Tag: userId,
+									TermsAndConditionsAccepted: true,
+									UserCategory: 'OWNER',
+									PersonType: 'NATURAL',
+								};
+							} else if (userType === 'legal') {
+								userParams = {
+									HeadquartersAddress: individualInfo.address,
+									LegalPersonType: 'BUSINESS',
+									Name: companyInfo.businessName,
+									LegalRepresentativeBirthday:
+										individualInfo.birthday,
+									LegalRepresentativeCountryOfResidence:
+										individualInfo.residence,
+									LegalRepresentativeNationality:
+										individualInfo.nationality,
+									LegalRepresentativeFirstName:
+										individualInfo.firstName,
+									LegalRepresentativeLastName:
+										individualInfo.lastName,
+									Email: userEmail,
+									Tag: userId,
+									CompanyNumber: Buffer.from(
+										companyInfo.vatNumber,
+									).toString('base64'),
+									TermsAndConditionsAccepted: true,
+									UserCategory: 'OWNER',
+									PersonType: 'LEGAL',
+								};
+							}
+
+							const mangopayUser = await _invokeMangopayFn(
+								mangopay,
+								'Users.create',
+								[userParams],
+								req,
+							);
+
+							if (!mangopayUser.Id) {
+								throw createError(
+									400,
+									'Probably some params missing for creating user',
+								);
+							}
+
+							mangopayUserId = mangopayUser.Id;
+
+							if (userType === 'natural') {
+								await _updateUser(req, userId, {
+									metadata: {
+										_private: {
+											individualInfo: {
+												nationality:
+													individualInfo.nationality,
+												residence:
+													individualInfo.residence,
+												birthDate: new Date(
+													params.birthDate,
+												).toISOString(),
+												address: individualInfo.address,
+												phone: individualInfo.phone,
+											},
+											addresses: [
+												{
+													firstName: user.firstname,
+													lastName: user.lastname,
+													...individualInfo.address,
+												},
+											],
+										},
+									},
+									platformData: {
+										_private: {
+											verified: {
+												individualInfo,
+											},
+											mangoPay: {
+												owner: {
+													id: mangopayUserId,
+												},
+											},
+										},
+									},
+								});
+							} else if (userType === 'legal') {
+								await _updateUser(req, userId, {
+									metadata: {
+										companyInfo: {
+											vatNumber: companyInfo.vatNumber,
+											address: individualInfo.address,
+										},
+										_private: {
+											individualInfo: {
+												nationality:
+													individualInfo.nationality,
+												residence:
+													individualInfo.residence,
+												birthDate: new Date(
+													params.birthDate,
+												).toISOString(),
+												phone: individualInfo.phone,
+											},
+											addresses: [
+												{
+													firstName: user.firstname,
+													lastName: user.lastname,
+													...individualInfo.address,
+												},
+											],
+										},
+									},
+									platformData: {
+										_private: {
+											verified: {
+												companyInfo: {
+													businessName: _.get(
+														user,
+														'metadata.companyInfo.businessName',
+														'',
+													),
+													vatNumber:
+														companyInfo.vatNumber ||
+														'',
+													address:
+														individualInfo.address,
+												},
+												individualInfo: {
+													...individualInfo,
+													address: undefined,
+												},
+											},
+											mangoPay: {
+												owner: {
+													id: mangopayUserId,
+												},
+											},
+										},
+									},
+								});
+							}
+						}
+
+						if (!walletId) {
+							const wallet = await _invokeMangopayFn(
+								mangopay,
+								'Wallets.create',
+								[
+									{
+										Owners: [mangopayUserId],
+										Description: `Wallet of ${userEmail} . USER ID: ${userId}`,
+										Currency: 'EUR',
+										Tag: userId,
+									},
+								],
+								req,
+							);
+
+							if (!wallet.Id) {
+								throw createError(400, 'Cannot create wallet');
+							}
+
+							walletId = wallet.Id;
+
+							await _updateUser(req, userId, {
+								platformData: {
+									_private: {
+										mangoPay: {
+											owner: {
+												walletId: walletId,
+											},
+										},
+									},
+								},
+							});
+						}
+
+						if (walletId && mangopayUserId) {
+							await _updateUser(req, userId, {
+								platformData: {
+									canSell: true,
+									_private: {
+										mangoPay: {
+											owner: {
+												kyc: {
+													info: true,
+												},
+											},
+										},
+									},
+								},
+							});
+						}
+
+						return {
+							Id: mangopayUserId,
+							Wallet: walletId,
+						};
 					} else {
 						if (Array.isArray(args)) {
 							if (
-								(args[0] !== mangopayUserInfo.payer &&
-									args[0] !== mangopayUserInfo.owner) ||
+								(Number(args[0]) !== mangopayUserInfo.payer &&
+									Number(args[0]) !==
+										mangopayUserInfo.owner) ||
 								(typeof mangopayUserInfo.payer ===
 									'undefined' &&
 									typeof mangopayUserInfo.owner ===
@@ -397,13 +691,16 @@ module.exports = function createService(deps) {
 				args = {
 					packagingSize: 'SMALL' | 'MEDIUM' | 'LARGE';
 					enabled?: boolean;
-					courier?: string;
+					carrier?: string;
 				}
 			*/
 		const config = await _getConfig(req);
+		const defaultCarrier = _.get('custom.defaultCarrier');
 		const shippingFares = _.get(
 			config,
-			`custom.shipping.${args.courier || 'default'}`,
+			`custom.shipping.${
+				args.carrier || defaultCarrier || 'SDA'
+			}.pricing`,
 			{},
 		);
 
@@ -467,17 +764,14 @@ module.exports = function createService(deps) {
 		if (method === 'Custom.payIn') {
 			/*
 				args = [{
-					courier?: string,
+					carrier?: string,
 					transactionId: string,
 					payment: {
 						secureModeReturnUrl: string;
 					}
 				}]
 			*/
-			const transaction = await _getTransaction(
-				req,
-				args[0].transactionId,
-			);
+			let transaction = await _getTransaction(req, args[0].transactionId);
 
 			if (
 				_.get(transaction, 'metadata.ip', null) === null ||
@@ -502,7 +796,7 @@ module.exports = function createService(deps) {
 			if (transaction.takerId === currentUserId) {
 				const shippingFare = await _getShippingFare(
 					{
-						courier: args[0].courier,
+						courier: args[0].carrier,
 						enabled: transaction.assetType.isDefault,
 						packagingSize: _.get(
 							transaction,
@@ -512,6 +806,8 @@ module.exports = function createService(deps) {
 					},
 					req,
 				);
+
+				console.log('Shipping fare: ', shippingFare);
 
 				await _updateTransaction(req, {
 					transactionId: transaction.id,
@@ -523,16 +819,38 @@ module.exports = function createService(deps) {
 
 				const userTaker = await _getUser(req, transaction.takerId);
 
+				console.log('User taker: ', userTaker);
+
 				const userTakerId = _.get(
 					userTaker,
 					'platformData._private.mangoPay.payer.id',
 					undefined,
 				);
 
+				console.log('User taker payer id: ', userTakerId);
+
 				const { escrow: escrowWallet } = await _getEscrowWallets(
 					mangopay,
 					req,
 				);
+
+				console.log('Escrow wallet: ', escrowWallet);
+
+				// Add fixed price to transaction (to takerAmount)
+				const config = await _getConfig(req);
+				const newTransaction = await _updateTransaction(req, {
+					transactionId: transaction.id,
+					takerAmount:
+						transaction.takerAmount +
+						_.get(
+							config,
+							'custom.additionalPricing.takerFeesFixed',
+							0,
+						),
+				});
+				transaction = newTransaction;
+
+				console.log('New transaction: ', newTransaction);
 
 				const totalAmount = transaction.takerAmount + shippingFare;
 
