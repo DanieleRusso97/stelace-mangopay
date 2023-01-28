@@ -98,12 +98,18 @@ function start(startParams) {
 		key: 'asset',
 	});
 
+	const entryRequester = getRequester({
+		name: 'Email service > Entry Requester',
+		key: 'entry',
+	});
+
 	Object.assign(deps, {
 		configRequester,
 		userRequester,
 		orderRequester,
 		transactionRequester,
 		assetRequester,
+		entryRequester,
 	});
 
 	mangopay = createService(deps);
@@ -116,6 +122,7 @@ function stop() {
 		orderRequester,
 		transactionRequester,
 		assetRequester,
+		entryRequester,
 	} = deps;
 
 	configRequester.close();
@@ -123,6 +130,7 @@ function stop() {
 	orderRequester.close();
 	transactionRequester.close();
 	assetRequester.close();
+	entryRequester.close();
 
 	deps = null;
 }

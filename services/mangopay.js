@@ -15,6 +15,7 @@ module.exports = function createService(deps) {
 		assetRequester,
 		// orderRequester,
 		transactionRequester,
+		entryRequester,
 	} = deps;
 
 	return {
@@ -732,8 +733,15 @@ module.exports = function createService(deps) {
 		const shippingWallet = escrowWallets.find(wallet =>
 			wallet.Description.toLowerCase().includes('shipping'),
 		);
+		const advWallet = escrowWallets.find(wallet =>
+			wallet.Description.toLowerCase().includes('adv'),
+		);
 
-		return { escrow: escrowWallet, shipping: shippingWallet };
+		return {
+			escrow: escrowWallet,
+			shipping: shippingWallet,
+			adv: advWallet,
+		};
 	}
 
 	async function paymentHandler(req) {
@@ -749,6 +757,7 @@ module.exports = function createService(deps) {
 			'Custom.transferToShipping',
 			'Custom.transferToOwner',
 			'Custom.sponsorProduct',
+			'Custom.sponsorProfile',
 			'Custom.updateAssetForAdv',
 			'Custom.stopAdv',
 		];
@@ -771,7 +780,7 @@ module.exports = function createService(deps) {
 					}
 				}]
 			*/
-			let transaction = await _getTransaction(req, args[0].transactionId);
+			const transaction = await _getTransaction(req, args[0].transactionId);
 
 			if (
 				_.get(transaction, 'metadata.ip', null) === null ||
@@ -834,25 +843,11 @@ module.exports = function createService(deps) {
 					req,
 				);
 
-				console.log('Escrow wallet: ', escrowWallet);
-
-				// Add fixed price to transaction (to takerAmount)
 				const config = await _getConfig(req);
-				const newTransaction = await _updateTransaction(req, {
-					transactionId: transaction.id,
-					takerAmount:
-						transaction.takerAmount +
-						_.get(
-							config,
-							'custom.additionalPricing.takerFeesFixed',
-							0,
-						),
-				});
-				transaction = newTransaction;
-
-				console.log('New transaction: ', newTransaction);
-
-				const totalAmount = transaction.takerAmount + shippingFare;
+				const totalAmount =
+					transaction.takerAmount +
+					shippingFare +
+					_.get(config, 'custom.additionalPricing.takerFeesFixed', 0);
 
 				const paymentData = {
 					AuthorId: mangopayUserInfo.payer,
@@ -1044,6 +1039,7 @@ module.exports = function createService(deps) {
 			/*
 				args = [{
 					assetIds: string[],
+					placement: 'home' | 'category' | 'newsletter'
 					timings: {
 						days: number;
 					},
@@ -1067,7 +1063,8 @@ module.exports = function createService(deps) {
 			*/
 			if (
 				_.get(args[0], 'assetIds', []).length === 0 ||
-				!args[0].timings
+				!args[0].timings ||
+				!args[0].placement
 			) {
 				throw createError(400, 'Some mangopay args missing');
 			}
@@ -1083,14 +1080,13 @@ module.exports = function createService(deps) {
 				throw createError(403, 'Cannot sponsor article of other users');
 			}
 
-			const { escrow: escrowWallet } = await _getEscrowWallets(
-				mangopay,
-				req,
-			);
+			const { adv: advWallet } = await _getEscrowWallets(mangopay, req);
 
 			const config = await _getConfig(req);
-			const advInfo = config.custom.adv.find(advProd =>
-				_.isEqual(advProd.timings, args[0].timings),
+			const placement = args[0].placement;
+
+			const advInfo = config.custom.adv.products[placement].find(
+				advProd => _.isEqual(advProd.timings, args[0].timings),
 			);
 
 			if (!advInfo) {
@@ -1123,18 +1119,19 @@ module.exports = function createService(deps) {
 
 			const paymentData = {
 				AuthorId: mangopayUserInfo.payer,
-				CreditedWalletId: escrowWallet.Id,
+				CreditedWalletId: advWallet.Id,
 				DebitedFunds: {
 					Currency: 'EUR',
 					Amount: price,
 				},
 				Fees: {
 					Currency: 'EUR',
-					Amount: price,
+					Amount: price - 1,
 				},
 				Tag: JSON.stringify({
 					assets: args[0].assetIds,
 					timings: args[0].timings,
+					placement: placement,
 				}),
 				PaymentType: 'CARD',
 				ExecutionType: 'DIRECT',
@@ -1163,6 +1160,7 @@ module.exports = function createService(deps) {
 			/*
 				args = [{
 					assetIds: string[],
+					placement: 'home' | 'category' | 'newsletter';
 					timings: {
 						days: number;
 					},
@@ -1178,7 +1176,8 @@ module.exports = function createService(deps) {
 				!Array.isArray(args[0].assetIds) ||
 				args[0].assetIds.length === 0 ||
 				!args[0].timings ||
-				!args[0].payinId
+				!args[0].payinId ||
+				!args[0].placement
 			) {
 				throw createError(400, 'Some mangopay args missing');
 			}
@@ -1192,10 +1191,12 @@ module.exports = function createService(deps) {
 				await _updateAsset(req, assetId, {
 					customAttributes: {
 						sponsored: true,
+						placement: args[0].placement,
 					},
 					platformData: {
 						adv: {
 							active: true,
+							placement: args[0].placement,
 							lastPayinId: args[0].payinId,
 							from: now,
 							to: endDate,
@@ -1215,7 +1216,8 @@ module.exports = function createService(deps) {
 		} else if (method === 'Custom.stopAdv') {
 			/*
 				args = [{
-					assetIds: string[],
+					assetIds?: string[],
+					userId?: string
 				}]
 			*/
 			if (!req._matchedPermissions['integrations:read_write:mangopay']) {
@@ -1223,43 +1225,220 @@ module.exports = function createService(deps) {
 			}
 
 			if (
-				!Array.isArray(args[0].assetIds) ||
-				args[0].assetIds.length === 0
+				(!Array.isArray(args[0].assetIds) ||
+					args[0].assetIds.length === 0) &&
+				!args[0].userId
 			) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
-			const assetIds = args[0].assetIds.filter(el => el);
+			if (args[0].userId && _.get(args[0], 'assetIds', []).length > 0) {
+				throw createError(400, 'Wrong mangopay args');
+			}
 
-			for (const assetId of assetIds) {
-				const asset = await _getAsset(req, assetId);
+			if (args[0].assetIds && args[0].assetIds.length > 0) {
+				const assetIds = args[0].assetIds.filter(el => el);
+
+				for (const assetId of assetIds) {
+					const asset = await _getAsset(req, assetId);
+
+					const now = new Date().getTime();
+
+					const endDate = _.get(
+						asset,
+						'platformData.adv.to',
+						undefined,
+					);
+
+					if (!endDate || now > endDate) {
+						await _updateAsset(req, assetId, {
+							customAttributes: {
+								sponsored: false,
+								placement: 'unset',
+							},
+							platformData: {
+								adv: {
+									active: false,
+									placement: 'unset',
+									lastPayinId: args[0].payinId,
+									from: now,
+									to: endDate,
+								},
+							},
+						});
+					}
+				}
+
+				const assets = assetIds.map(
+					async assetId => await _getAsset(req, assetId),
+				);
+
+				return assets;
+			} else if (args[0].userId) {
+				const user = await _getUser(req, args[0].userId);
 
 				const now = new Date().getTime();
 
-				const endDate = _.get(asset, 'platformData.adv.to', undefined);
+				const endDate = _.get(user, 'platformData.adv.to', undefined);
 
 				if (!endDate || now > endDate) {
-					await _updateAsset(req, assetId, {
-						customAttributes: {
-							sponsored: false,
-						},
+					await _updateUser(req, user.id, {
 						platformData: {
 							adv: {
 								active: false,
+								placement: 'unset',
 								lastPayinId: args[0].payinId,
 								from: now,
 								to: endDate,
 							},
 						},
 					});
+					const entryList = await entryRequester.communicate(req)({
+						type: 'list',
+						collection: 'adv',
+						name: 'profile',
+						locale: 'it-IT',
+						orderBy: 'createdDate',
+						order: 'desc',
+						page: 1,
+						nbResultsPerPage: 1, // common template + specified template
+					});
+					const entryId = entryList.results[0].id;
+					const exFieldHome = entryList.results[0].fields.home;
+					const newFieldHome = exFieldHome.filter(
+						el => el !== user.id,
+					);
+
+					await entryRequester.communicate(req)({
+						type: 'update',
+						collection: 'adv',
+						name: 'profile',
+						entryId: entryId,
+						fields: {
+							home: newFieldHome,
+						},
+					});
 				}
+
+				return user;
+			}
+		} else if (method === 'Custom.sponsorProfile') {
+			/*
+				args = [{
+					userId: string,
+					placement: 'home' | 'newsletter'
+					timings: {
+						days: number;
+					},
+					payment: {
+						secureModeReturnUrl: string;
+					},
+					browserData: {
+						AcceptHeader?: string;
+						JavaEnabled?: boolean;
+						Language?: string;
+						ColorDepth: number;
+						ScreenHeight: number;
+						ScreenWidth: number;
+						TimeZoneOffset: number;
+						UserAgent?: string;
+						JavascriptEnabled?: boolean;
+					},
+					ip: string;
+					paymentMethod?: string;
+				}]
+			*/
+			if (!args[0].userId || !args[0].timings || !args[0].placement) {
+				throw createError(400, 'Some mangopay args missing');
 			}
 
-			const assets = assetIds.map(
-				async assetId => await _getAsset(req, assetId),
-			);
+			if (
+				args[0].userId !== currentUserId &&
+				!req._matchedPermissions['integrations:read_write:mangopay']
+			) {
+				throw createError(403, 'Cannot sponsor profile of other users');
+			}
 
-			return assets;
+			const user = await _getUser(req, args[0].userId);
+			const userType =
+				_.get(user, 'platformData.userType') === 'business'
+					? 'pro'
+					: 'private';
+
+			const { adv: advWallet } = await _getEscrowWallets(mangopay, req);
+
+			const config = await _getConfig(req);
+			const placement = args[0].placement;
+
+			const advInfo = config.custom.adv.profile[
+				placement === 'newsletter' ? 'newsletter' : userType
+			].find(advProd => _.isEqual(advProd.timings, args[0].timings));
+
+			if (!advInfo) {
+				throw createError(404, "This type of adv doesn't exist");
+			}
+
+			const price = advInfo.price;
+
+			let paymentMethod;
+			if (!args[0].paymentMethod) {
+				const paymentMethods = _.get(
+					user,
+					'metadata._private.paymentMethods',
+					[],
+				);
+
+				if (paymentMethods.length === 0) {
+					throw createError(
+						404,
+						'No payment methods founded for the current user',
+					);
+				}
+
+				paymentMethod = paymentMethods[0].id;
+			} else {
+				paymentMethod = args[0].paymentMethod;
+			}
+
+			const paymentData = {
+				AuthorId: mangopayUserInfo.payer,
+				CreditedWalletId: advWallet.Id,
+				DebitedFunds: {
+					Currency: 'EUR',
+					Amount: price,
+				},
+				Fees: {
+					Currency: 'EUR',
+					Amount: price - 1,
+				},
+				Tag: JSON.stringify({
+					userId: args[0].userId,
+					timings: args[0].timings,
+					placement: placement,
+				}),
+				PaymentType: 'CARD',
+				ExecutionType: 'DIRECT',
+				Culture: 'IT',
+				CardId: paymentMethod,
+				SecureModeReturnURL: args[0].payment.secureModeReturnUrl,
+				// StatementDescriptor: '',
+				IpAddress: args[0].ip,
+				BrowserInfo: {
+					AcceptHeader: rawHeaders.accept,
+					JavaEnabled: false,
+					JavascriptEnabled: true,
+					UserAgent: req._userAgent || rawHeaders['user-agent'],
+					Language: rawHeaders['accept-language'].substring(0, 2),
+					...args[0].browserData,
+				},
+			};
+
+			return await _invokeMangopayFn(
+				mangopay,
+				'PayIns.create',
+				[paymentData],
+				req,
+			);
 		}
 	}
 
