@@ -8,8 +8,8 @@ module.exports = {
 
 	rules: {
 		'comma-dangle': 'off',
-		indent: ['error', 'tab'],
-		'no-tabs': 0,
+		indent: ['error', 'tab', 4],
+		'no-tabs': 'off',
 		'space-before-function-paren': 0,
 		semi: ['error', 'always'],
 	},

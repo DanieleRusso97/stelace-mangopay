@@ -16,6 +16,7 @@ module.exports = function createService(deps) {
 		// orderRequester,
 		transactionRequester,
 		entryRequester,
+		taskRequester,
 	} = deps;
 
 	return {
@@ -77,6 +78,14 @@ module.exports = function createService(deps) {
 			...args,
 		});
 		return asset;
+	}
+
+	async function _createTask(req, args) {
+		const task = await taskRequester.communicate(req)({
+			type: 'create',
+			...args,
+		});
+		return task;
 	}
 
 	// async function _updateTransaction(req, transactionId, args) {
@@ -780,7 +789,10 @@ module.exports = function createService(deps) {
 					}
 				}]
 			*/
-			const transaction = await _getTransaction(req, args[0].transactionId);
+			const transaction = await _getTransaction(
+				req,
+				args[0].transactionId,
+			);
 
 			if (
 				_.get(transaction, 'metadata.ip', null) === null ||
@@ -1039,10 +1051,24 @@ module.exports = function createService(deps) {
 			/*
 				args = [{
 					assetIds: string[],
-					placement: 'home' | 'category' | 'newsletter'
-					timings: {
-						days: number;
-					},
+					advProduct: {
+								home:
+									| {
+											label: string;
+											timings: IAdvTiming;
+											price: number;
+											type?: 'private' | 'pro';
+									}
+									| undefined;
+								category:
+									| {
+											label: string;
+											timings: IAdvTiming;
+											price: number;
+											type?: 'private' | 'pro';
+									}
+									| undefined
+								},
 					payment: {
 						secureModeReturnUrl: string;
 					},
@@ -1063,8 +1089,9 @@ module.exports = function createService(deps) {
 			*/
 			if (
 				_.get(args[0], 'assetIds', []).length === 0 ||
-				!args[0].timings ||
-				!args[0].placement
+				!args[0].advProduct ||
+				(!_.get(args[0].advProduct, 'home') &&
+					!_.get(args[0].advProduct, 'category'))
 			) {
 				throw createError(400, 'Some mangopay args missing');
 			}
@@ -1083,17 +1110,22 @@ module.exports = function createService(deps) {
 			const { adv: advWallet } = await _getEscrowWallets(mangopay, req);
 
 			const config = await _getConfig(req);
-			const placement = args[0].placement;
 
-			const advInfo = config.custom.adv.products[placement].find(
-				advProd => _.isEqual(advProd.timings, args[0].timings),
-			);
+			let price = 0;
 
-			if (!advInfo) {
-				throw createError(404, "This type of adv doesn't exist");
+			for (const [placement, advRequested] of Object.entries(
+				args[0].advProduct,
+			)) {
+				const advInfo = config.custom.adv.products[placement].find(
+					advProd => _.isEqual(advProd.timings, advRequested.timings),
+				);
+
+				if (!advInfo) {
+					throw createError(404, "This type of adv doesn't exist");
+				}
+
+				price = price + advInfo.price * assets.length;
 			}
-
-			const price = advInfo.price * assets.length;
 
 			const user = await _getUser(req, currentUserId);
 
@@ -1130,8 +1162,7 @@ module.exports = function createService(deps) {
 				},
 				Tag: JSON.stringify({
 					assets: args[0].assetIds,
-					timings: args[0].timings,
-					placement: placement,
+					advProduct: args[0].advProduct,
 				}),
 				PaymentType: 'CARD',
 				ExecutionType: 'DIRECT',
@@ -1160,11 +1191,25 @@ module.exports = function createService(deps) {
 			/*
 				args = [{
 					assetIds: string[],
-					placement: 'home' | 'category' | 'newsletter';
-					timings: {
-						days: number;
-					},
-					payinId: string;
+					advProduct?: {
+								home:
+									| {
+											label: string;
+											timings: IAdvTiming;
+											price: number;
+											type?: 'private' | 'pro';
+									}
+									| undefined;
+								category:
+									| {
+											label: string;
+											timings: IAdvTiming;
+											price: number;
+											type?: 'private' | 'pro';
+									}
+									| undefined
+								},
+					payinId?: string;
 				}]
 			*/
 
@@ -1172,47 +1217,94 @@ module.exports = function createService(deps) {
 				throw createError(403, 'Not allowed');
 			}
 
-			if (
-				!Array.isArray(args[0].assetIds) ||
-				args[0].assetIds.length === 0 ||
-				!args[0].timings ||
-				!args[0].payinId ||
-				!args[0].placement
-			) {
+			if (_.get(args[0], 'assetIds', []).length === 0) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
 			const assetIds = args[0].assetIds.filter(el => el);
 
-			const now = new Date().getTime();
-			const endDate = now + args[0].timings.days * 1000 * 60 * 60 * 24;
+			const adv = [];
 
-			for (const assetId of assetIds) {
-				await _updateAsset(req, assetId, {
-					customAttributes: {
-						sponsored: true,
-						placement: args[0].placement,
-					},
-					platformData: {
-						adv: {
-							active: true,
-							placement: args[0].placement,
-							lastPayinId: args[0].payinId,
-							from: now,
-							to: endDate,
+			for (const [placement, advRequested] of Object.entries(
+				args[0].advProduct,
+			)) {
+				if (_.get(advRequested, 'timings.days')) {
+					const endDate =
+						now + advRequested.timings.days * 1000 * 60 * 60 * 24;
+					adv.push({
+						active: true,
+						placement,
+						lastPayinId: args[0].payinId,
+						timings: advRequested.timings,
+						from: now,
+						to: endDate,
+					});
+				}
+			}
+
+			if (args[0].advProduct && args[0].payinId) {
+				const now = new Date().getTime();
+
+				for (const assetId of assetIds) {
+					await _updateAsset(req, assetId, {
+						customAttributes: {
+							sponsored: true,
+							placement: adv.map(advInfo => adv.placement),
 						},
-					},
-				});
+						platformData: {
+							adv: adv,
+						},
+					});
+				}
 			}
 
 			const assets = assetIds.map(
 				async assetId => await _getAsset(req, assetId),
 			);
 
-			return {
-				assets,
-				endDate,
-			};
+			if (
+				args[0].advProduct ||
+				(!args[0].advProduct &&
+					assets.every(ast =>
+						_.get(ast, 'platformData.adv', []).some(
+							ad => ad.active,
+						),
+					))
+			) {
+				const assetValidated = assets.filter(asset =>
+					_.get(asset, 'platformData.admin.validated', false),
+				);
+
+				const assetNotValidated = assets.filter(
+					asset =>
+						!_.get(asset, 'platformData.admin.validated', false),
+				);
+
+				const ads = adv || _.get(assets[0], 'platformData.adv');
+
+				const tasks = [];
+				for (const advProd of ads) {
+					const newTask = await _createTask(req, {
+						executionDate: new Date(
+							advProd.to + 100000,
+						).toISOString(),
+						eventType: 'stop_adv',
+						eventMetadata: {
+							assetIds: assetValidated,
+						},
+					});
+					tasks.push(newTask);
+				}
+
+				return {
+					assets: assetValidated,
+					ads,
+					assetExcluded: assetNotValidated,
+					task: tasks,
+				};
+			} else {
+				throw createError(400, 'Asset not sponsored');
+			}
 		} else if (method === 'Custom.stopAdv') {
 			/*
 				args = [{
@@ -1240,32 +1332,46 @@ module.exports = function createService(deps) {
 				const assetIds = args[0].assetIds.filter(el => el);
 
 				for (const assetId of assetIds) {
-					const asset = await _getAsset(req, assetId);
+					let asset = await _getAsset(req, assetId);
 
 					const now = new Date().getTime();
 
-					const endDate = _.get(
-						asset,
-						'platformData.adv.to',
-						undefined,
-					);
+					const adv = _.get(asset, 'platformData.adv');
 
-					if (!endDate || now > endDate) {
-						await _updateAsset(req, assetId, {
-							customAttributes: {
-								sponsored: false,
-								placement: 'unset',
-							},
-							platformData: {
-								adv: {
-									active: false,
-									placement: 'unset',
-									lastPayinId: args[0].payinId,
-									from: now,
-									to: endDate,
-								},
-							},
-						});
+					for (const ad of adv) {
+						const endDate = ad.to;
+
+						if (!endDate || now > endDate) {
+							const newPlacement = _.get(
+								asset,
+								'customAttributes.placement',
+								[],
+							).filter(plc => plc !== ad.placement);
+
+							if (_.isEmpty(newPlacement)) {
+								asset = await _updateAsset(req, assetId, {
+									customAttributes: {
+										sponsored: false,
+										placement: 'unset',
+									},
+									platformData: {
+										adv: null,
+									},
+								});
+							} else {
+								asset = await _updateAsset(req, assetId, {
+									customAttributes: {
+										placement: newPlacement,
+									},
+									platformData: {
+										adv: adv.filter(
+											ads =>
+												ads.placement !== ad.placement,
+										),
+									},
+								});
+							}
+						}
 					}
 				}
 
@@ -1326,7 +1432,7 @@ module.exports = function createService(deps) {
 			/*
 				args = [{
 					userId: string,
-					placement: 'home' | 'newsletter'
+					// placement: 'home' | 'newsletter'
 					timings: {
 						days: number;
 					},
@@ -1348,7 +1454,7 @@ module.exports = function createService(deps) {
 					paymentMethod?: string;
 				}]
 			*/
-			if (!args[0].userId || !args[0].timings || !args[0].placement) {
+			if (!args[0].userId || !args[0].timings) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
@@ -1365,14 +1471,38 @@ module.exports = function createService(deps) {
 					? 'pro'
 					: 'private';
 
+			// CHECK IF ALREADY SPONSORED
+			const entryList = await entryRequester.communicate(req)({
+				type: 'list',
+				collection: 'adv',
+				name: 'profile',
+				locale: 'it-IT',
+				orderBy: 'createdDate',
+				order: 'desc',
+				page: 1,
+				nbResultsPerPage: 1, // common template + specified template
+			});
+			const exFieldHome = entryList.results[0].fields.home;
+
+			if (exFieldHome.includes(user.id)) {
+				throw createError(500, 'User already sponsored');
+			}
+
 			const { adv: advWallet } = await _getEscrowWallets(mangopay, req);
 
 			const config = await _getConfig(req);
-			const placement = args[0].placement;
 
-			const advInfo = config.custom.adv.profile[
-				placement === 'newsletter' ? 'newsletter' : userType
-			].find(advProd => _.isEqual(advProd.timings, args[0].timings));
+			const advProfile =
+				userType === 'pro'
+					? config.custom.adv.profile.private
+					: [
+							...config.custom.adv.profile.private,
+							...config.custom.adv.profile.pro,
+					  ];
+
+			const advInfo = advProfile.find(advProd =>
+				_.isEqual(advProd.timings, args[0].timings),
+			);
 
 			if (!advInfo) {
 				throw createError(404, "This type of adv doesn't exist");
@@ -1414,7 +1544,7 @@ module.exports = function createService(deps) {
 				Tag: JSON.stringify({
 					userId: args[0].userId,
 					timings: args[0].timings,
-					placement: placement,
+					// placement: placement,
 				}),
 				PaymentType: 'CARD',
 				ExecutionType: 'DIRECT',
