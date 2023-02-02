@@ -1224,6 +1224,7 @@ module.exports = function createService(deps) {
 			const assetIds = args[0].assetIds.filter(el => el);
 
 			const adv = [];
+			const now = new Date().getTime();
 
 			for (const [placement, advRequested] of Object.entries(
 				args[0].advProduct,
@@ -1243,8 +1244,6 @@ module.exports = function createService(deps) {
 			}
 
 			if (args[0].advProduct && args[0].payinId) {
-				const now = new Date().getTime();
-
 				for (const assetId of assetIds) {
 					await _updateAsset(req, assetId, {
 						customAttributes: {
