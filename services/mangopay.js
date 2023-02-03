@@ -1229,6 +1229,7 @@ module.exports = function createService(deps) {
 			for (const [placement, advRequested] of Object.entries(
 				args[0].advProduct,
 			)) {
+				console.log('placement: ', placement);
 				if (_.get(advRequested, 'timings.days')) {
 					const endDate =
 						now + advRequested.timings.days * 1000 * 60 * 60 * 24;
@@ -1244,11 +1245,16 @@ module.exports = function createService(deps) {
 			}
 
 			if (args[0].advProduct && args[0].payinId) {
+				console.log(
+					'advPlacement: ',
+					adv,
+					adv.map(advInfo => advInfo.placement),
+				);
 				for (const assetId of assetIds) {
 					await _updateAsset(req, assetId, {
 						customAttributes: {
 							sponsored: true,
-							placement: adv.map(advInfo => adv.placement),
+							placement: adv.map(advInfo => advInfo.placement),
 						},
 						platformData: {
 							adv: adv,
@@ -1257,9 +1263,11 @@ module.exports = function createService(deps) {
 				}
 			}
 
-			const assets = assetIds.map(
-				async assetId => await _getAsset(req, assetId),
+			const assets = await Promise.all(
+				assetIds.map(async assetId => await _getAsset(req, assetId)),
 			);
+
+			console.log(assets);
 
 			if (
 				args[0].advProduct ||
@@ -1289,16 +1297,16 @@ module.exports = function createService(deps) {
 						).toISOString(),
 						eventType: 'stop_adv',
 						eventMetadata: {
-							assetIds: assetValidated,
+							assetIds: assetValidated.map(ast => ast.id),
 						},
 					});
 					tasks.push(newTask);
 				}
 
 				return {
-					assets: assetValidated,
+					assets: assetValidated.map(ast => ast.id),
 					ads,
-					assetExcluded: assetNotValidated,
+					assetExcluded: assetNotValidated.map(ast => ast.id),
 					task: tasks,
 				};
 			} else {
@@ -1329,16 +1337,25 @@ module.exports = function createService(deps) {
 
 			if (args[0].assetIds && args[0].assetIds.length > 0) {
 				const assetIds = args[0].assetIds.filter(el => el);
+				let stopped = false;
+				let returnMessage = '';
+				let placementStopped = [];
 
 				for (const assetId of assetIds) {
 					let asset = await _getAsset(req, assetId);
 
 					const now = new Date().getTime();
+					console.log('NOW: ', now);
 
-					const adv = _.get(asset, 'platformData.adv');
+					const adv = _.get(asset, 'platformData.adv', []);
+
+					if (_.isEmpty(adv)) {
+						throw createError(400, 'Product not sponsored');
+					}
 
 					for (const ad of adv) {
 						const endDate = ad.to;
+						console.log('enddate: ', ad.to);
 
 						if (!endDate || now > endDate) {
 							const newPlacement = _.get(
@@ -1346,12 +1363,13 @@ module.exports = function createService(deps) {
 								'customAttributes.placement',
 								[],
 							).filter(plc => plc !== ad.placement);
+							console.log(newPlacement);
 
 							if (_.isEmpty(newPlacement)) {
 								asset = await _updateAsset(req, assetId, {
 									customAttributes: {
 										sponsored: false,
-										placement: 'unset',
+										placement: ['unset'],
 									},
 									platformData: {
 										adv: null,
@@ -1370,15 +1388,29 @@ module.exports = function createService(deps) {
 									},
 								});
 							}
+							stopped = true;
+							placementStopped.push(ad.placement);
 						}
 					}
 				}
 
-				const assets = assetIds.map(
-					async assetId => await _getAsset(req, assetId),
+				if (placementStopped.length > 0) {
+					returnMessage = `Due and stopped: ${placementStopped.join(
+						', ',
+					)}`;
+				} else returnMessage = 'Not due yet or not sponsored';
+
+				const assets = await Promise.all(
+					assetIds.map(
+						async assetId => await _getAsset(req, assetId),
+					),
 				);
 
-				return assets;
+				return {
+					assets: assets,
+					stopped,
+					message: returnMessage,
+				};
 			} else if (args[0].userId) {
 				const user = await _getUser(req, args[0].userId);
 
@@ -1391,7 +1423,7 @@ module.exports = function createService(deps) {
 						platformData: {
 							adv: {
 								active: false,
-								placement: 'unset',
+								placement: null,
 								lastPayinId: args[0].payinId,
 								from: now,
 								to: endDate,
