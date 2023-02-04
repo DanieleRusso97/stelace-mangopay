@@ -996,7 +996,7 @@ module.exports = function createService(deps) {
 				_.get(transaction, 'platformData.completedTransfer', false) ===
 				true
 			) {
-				throw createError(500, 'Transfer already done');
+				return transaction;
 			}
 
 			const transferToOwner = transaction.ownerAmount || 0;
@@ -1250,12 +1250,17 @@ module.exports = function createService(deps) {
 					adv,
 					adv.map(advInfo => advInfo.placement),
 				);
+				const newCustomAttributes = {
+					sponsoredHome: adv.some(
+						advInfo => advInfo.placement === 'home',
+					),
+					sponsoredCategory: adv.some(
+						advInfo => advInfo.placement === 'category',
+					),
+				};
 				for (const assetId of assetIds) {
 					await _updateAsset(req, assetId, {
-						customAttributes: {
-							sponsored: true,
-							placement: adv.map(advInfo => advInfo.placement),
-						},
+						customAttributes: newCustomAttributes,
 						platformData: {
 							adv: adv,
 						},
@@ -1335,10 +1340,11 @@ module.exports = function createService(deps) {
 				throw createError(400, 'Wrong mangopay args');
 			}
 
+			let stopped = false;
+			let returnMessage = '';
+
 			if (args[0].assetIds && args[0].assetIds.length > 0) {
 				const assetIds = args[0].assetIds.filter(el => el);
-				let stopped = false;
-				let returnMessage = '';
 				let placementStopped = [];
 
 				for (const assetId of assetIds) {
@@ -1353,45 +1359,35 @@ module.exports = function createService(deps) {
 						throw createError(400, 'Product not sponsored');
 					}
 
-					for (const ad of adv) {
+					let newCustomAttributes = {};
+					let newAdv = adv;
+
+					for (const [idx, ad] of adv.entries()) {
 						const endDate = ad.to;
 						console.log('enddate: ', ad.to);
 
 						if (!endDate || now > endDate) {
-							const newPlacement = _.get(
-								asset,
-								'customAttributes.placement',
-								[],
-							).filter(plc => plc !== ad.placement);
-							console.log(newPlacement);
-
-							if (_.isEmpty(newPlacement)) {
-								asset = await _updateAsset(req, assetId, {
-									customAttributes: {
-										sponsored: false,
-										placement: ['unset'],
-									},
-									platformData: {
-										adv: null,
-									},
-								});
-							} else {
-								asset = await _updateAsset(req, assetId, {
-									customAttributes: {
-										placement: newPlacement,
-									},
-									platformData: {
-										adv: adv.filter(
-											ads =>
-												ads.placement !== ad.placement,
-										),
-									},
-								});
+							if (ad.placement === 'home') {
+								newCustomAttributes.sponsoredHome = false;
+								newAdv[idx] = null;
 							}
+							if (ad.placement === 'category') {
+								newCustomAttributes.sponsoredCategory = false;
+								newAdv[idx] = null;
+							}
+
 							stopped = true;
 							placementStopped.push(ad.placement);
 						}
 					}
+
+					newAdv = newAdv.filter(el => el);
+					asset = await _updateAsset(req, assetId, {
+						customAttributes: newCustomAttributes,
+						platformData: {
+							adv: _.isEmpty(newAdv) ? null : newAdv,
+						},
+					});
 				}
 
 				if (placementStopped.length > 0) {
@@ -1412,14 +1408,14 @@ module.exports = function createService(deps) {
 					message: returnMessage,
 				};
 			} else if (args[0].userId) {
-				const user = await _getUser(req, args[0].userId);
+				let user = await _getUser(req, args[0].userId);
 
 				const now = new Date().getTime();
 
 				const endDate = _.get(user, 'platformData.adv.to', undefined);
 
 				if (!endDate || now > endDate) {
-					await _updateUser(req, user.id, {
+					user = await _updateUser(req, user.id, {
 						platformData: {
 							adv: {
 								active: false,
@@ -1455,9 +1451,11 @@ module.exports = function createService(deps) {
 							home: newFieldHome,
 						},
 					});
-				}
 
-				return user;
+					returnMessage = 'Due and stopped';
+				} else returnMessage = 'Not due yet';
+
+				return { user: user, message: returnMessage };
 			}
 		} else if (method === 'Custom.sponsorProfile') {
 			/*
