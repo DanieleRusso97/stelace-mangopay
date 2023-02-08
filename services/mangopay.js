@@ -238,7 +238,7 @@ module.exports = function createService(deps) {
 
 		const mangopay = await _mangopayAuth(req);
 
-		// Only some methods are available to every user and they can operate only with their userId
+		// Only some methods are available to av: user and they can operate only with their userId
 		const methodAllowed = [
 			'Users.createBankAccount',
 			'Users.getBankAccount',
@@ -364,7 +364,8 @@ module.exports = function createService(deps) {
 						const user = await _getUser(req, getCurrentUserId(req));
 						if (args[0].AuthorId) {
 							if (
-								args[0].AuthorId !== mangopayUserInfo.owner ||
+								args[0].AuthorId !==
+									mangopayUserInfo.owner.toString() ||
 								args[0].DebitedWalletId !==
 									_.get(
 										user,
@@ -372,6 +373,22 @@ module.exports = function createService(deps) {
 									)
 							) {
 								throw createError(403, 'Not allowed');
+							} else {
+								await _updateUser(req, user.id, {
+									platformData: {
+										_private: {
+											balance: {
+												inTransfer:
+													_.get(
+														user,
+														'platformData._private.balance.inTransfer',
+														0,
+													) +
+													args[0].DebitedFunds.Amount,
+											},
+										},
+									},
+								});
 							}
 						} else {
 							throw createError(
@@ -762,7 +779,6 @@ module.exports = function createService(deps) {
 		const methods = [
 			'Custom.refundPayIns',
 			'Custom.payIn',
-			'Custom.payOut',
 			'Custom.transferToShipping',
 			'Custom.transferToOwner',
 			'Custom.sponsorProduct',
@@ -924,10 +940,11 @@ module.exports = function createService(deps) {
 			const payinRefunds = [];
 
 			for (const payinId of payinIds) {
+				const payin = await mangopay.PayIns.get(payinId);
 				const payinRefund = await mangopay.PayIns.createRefund(
 					payinId,
 					{
-						AuthorId: process.env.ESCROW_USER,
+						AuthorId: payin.AuthorId,
 					},
 				);
 				payinRefunds.push(payinRefund);
@@ -1035,13 +1052,15 @@ module.exports = function createService(deps) {
 
 			await _updateUser(req, ownerUser.id, {
 				platformData: {
-					balance: {
-						pending:
-							_.get(
-								ownerUser,
-								'platformData._private.balance.pending',
-								0,
-							) - amountTransfered,
+					_private: {
+						balance: {
+							pending:
+								_.get(
+									ownerUser,
+									'platformData._private.balance.pending',
+									0,
+								) - amountTransfered,
+						},
 					},
 				},
 			});
@@ -1226,10 +1245,13 @@ module.exports = function createService(deps) {
 			const adv = [];
 			const now = new Date().getTime();
 
+			const unitAmount = await (
+				await mangopay.PayIns.get(args[0].payinId)
+			).DebitedFunds.Amount;
+
 			for (const [placement, advRequested] of Object.entries(
 				args[0].advProduct,
 			)) {
-				console.log('placement: ', placement);
 				if (_.get(advRequested, 'timings.days')) {
 					const endDate =
 						now + advRequested.timings.days * 1000 * 60 * 60 * 24;
@@ -1240,6 +1262,7 @@ module.exports = function createService(deps) {
 						timings: advRequested.timings,
 						from: now,
 						to: endDate,
+						unitAmount: unitAmount,
 					});
 				}
 			}
@@ -1423,6 +1446,7 @@ module.exports = function createService(deps) {
 								lastPayinId: args[0].payinId,
 								from: now,
 								to: endDate,
+								unitAmount: 0,
 							},
 						},
 					});
@@ -1524,10 +1548,7 @@ module.exports = function createService(deps) {
 			const advProfile =
 				userType === 'pro'
 					? config.custom.adv.profile.private
-					: [
-							...config.custom.adv.profile.private,
-							...config.custom.adv.profile.pro,
-					  ];
+					: config.custom.adv.profile.pro;
 
 			const advInfo = advProfile.find(advProd =>
 				_.isEqual(advProd.timings, args[0].timings),
