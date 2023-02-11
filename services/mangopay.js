@@ -805,7 +805,7 @@ module.exports = function createService(deps) {
 					}
 				}]
 			*/
-			const transaction = await _getTransaction(
+			let transaction = await _getTransaction(
 				req,
 				args[0].transactionId,
 			);
@@ -876,6 +876,16 @@ module.exports = function createService(deps) {
 					transaction.takerAmount +
 					shippingFare +
 					_.get(config, 'custom.additionalPricing.takerFeesFixed', 0);
+
+				transaction = await _updateTransaction(req, {
+					takerAmount:
+						transaction.takerAmount +
+						_.get(
+							config,
+							'custom.additionalPricing.takerFeesFixed',
+							0,
+						),
+				});
 
 				const paymentData = {
 					AuthorId: mangopayUserInfo.payer,
@@ -1115,8 +1125,10 @@ module.exports = function createService(deps) {
 				throw createError(400, 'Some mangopay args missing');
 			}
 
-			const assets = args[0].assetIds.map(
-				async assetId => await _getAsset(req, assetId),
+			const assets = await Promise.all(
+				args[0].assetIds.map(
+					async assetId => await _getAsset(req, assetId),
+				),
 			);
 
 			if (
@@ -1182,6 +1194,7 @@ module.exports = function createService(deps) {
 				Tag: JSON.stringify({
 					assets: args[0].assetIds,
 					advProduct: args[0].advProduct,
+					userId: user.id,
 				}),
 				PaymentType: 'CARD',
 				ExecutionType: 'DIRECT',
@@ -1547,8 +1560,8 @@ module.exports = function createService(deps) {
 
 			const advProfile =
 				userType === 'pro'
-					? config.custom.adv.profile.private
-					: config.custom.adv.profile.pro;
+					? config.custom.adv.profile.pro
+					: config.custom.adv.profile.private;
 
 			const advInfo = advProfile.find(advProd =>
 				_.isEqual(advProd.timings, args[0].timings),
