@@ -878,6 +878,7 @@ module.exports = function createService(deps) {
 					_.get(config, 'custom.additionalPricing.takerFeesFixed', 0);
 
 				transaction = await _updateTransaction(req, {
+					transactionId: transaction.id,
 					takerAmount:
 						transaction.takerAmount +
 						_.get(
