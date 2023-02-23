@@ -1,150 +1,240 @@
-const createService = require('../services/mangopay');
+const _ = require('lodash')
 
-let mangopay;
-let deps = {};
+let requester
 
-function init(server, { middlewares, helpers } = {}) {
-	const { checkPermissions, restifyAuthorizationParser } = middlewares;
-	const { wrapAction, getRequestContext } = helpers;
+function init (server, { middlewares, helpers } = {}) {
+  const {
+    checkPermissions
+  } = middlewares
+  const {
+    wrapAction,
+    populateRequesterParams
+  } = helpers
 
-	server.post(
-		{
-			name: 'mangopay.pluginRequest',
-			path: '/integrations/mangopay/request',
-		},
-		checkPermissions(['integrations:read_write:mangopay', 'token:check']),
-		wrapAction(async (req, res) => {
-			let ctx = getRequestContext(req);
+  server.get({
+    name: 'message.getStats',
+    path: '/messages/stats'
+  }, checkPermissions([
+    'message:list'
+  ]), wrapAction(async (req, res) => {
+    const fields = [
+      'orderBy',
+      'order',
+      'page',
+      'nbResultsPerPage',
 
-			const { args, method } = req.body;
-			ctx = Object.assign({}, ctx, { args, method });
+      'field',
+      'groupBy',
+      'avgPrecision',
 
-			return mangopay.sendRequest(ctx);
-		}),
-	);
+      'id',
+      // 'type' // parsing manually below to avoid conflict with côte requester 'type'
+      'read',
+      'createdDate',
+      'topicId',
+			'conversationId',
+			'senderId',
+			'receiverId',
+      'userId',
+    ]
 
-	server.post(
-		{
-			name: 'mangopay.paymentHandler',
-			path: '/integrations/mangopay/payment',
-		},
-		checkPermissions([
-			'integrations:read_write:mangopay',
-			'transaction:create',
-		]),
-		wrapAction(async (req, res) => {
-			let ctx = getRequestContext(req);
+    const payload = _.pick(req.query, fields)
 
-			const { args, method } = req.body;
-			ctx = Object.assign({}, ctx, {
-				args,
-				method,
-				rawHeaders: req.headers,
-			});
+    let params = populateRequesterParams(req)({
+      type: 'getStats'
+    })
 
-			return mangopay.paymentHandler(ctx);
-		}),
-	);
+    params = Object.assign({}, params, payload)
 
-	server.get(
-		{
-			name: 'mangopay.webhooks',
-			path: '/integrations/mangopay/webhooks/:publicPlatformId',
-			manualAuth: true,
-		},
-		restifyAuthorizationParser,
-		wrapAction(async (req, res) => {
-			const { publicPlatformId } = req.params;
+    if (req.query) params.eventType = req.query.type
 
-			return mangopay.webhook({
-				_requestId: req._requestId,
-				publicPlatformId,
-				rawBody: req.query,
-				deps,
-			});
-		}),
-	);
+    return requester.send(params)
+  }))
+
+  server.get({
+    name: 'message.last',
+    path: '/messages/last'
+  }, checkPermissions([
+    'message:list'
+  ]), wrapAction(async (req, res) => {
+    const fields = [
+      'orderBy',
+      'order',
+      'page',
+      'nbResultsPerPage',
+
+      'id',
+      // 'type' // parsing manually below to avoid conflict with côte requester 'type'
+      'read',
+      'createdDate',
+      'topicId',
+			'conversationId',
+			'senderId',
+			'receiverId',
+      'userId',
+    ]
+
+    const payload = _.pick(req.query, fields)
+
+    let params = populateRequesterParams(req)({
+      type: 'last'
+    })
+
+    params = Object.assign({}, params, payload)
+
+    if (req.query) params.eventType = req.query.type
+
+    return requester.send(params)
+  }))
+
+  server.get({
+    name: 'message.list',
+    path: '/messages'
+  }, checkPermissions([
+    'message:list',
+    'message:list:all'
+  ]), wrapAction(async (req, res) => {
+    const fields = [
+      'orderBy',
+      'order',
+      'page',
+      'nbResultsPerPage',
+
+      'id',
+      'createdDate',
+      'updatedDate',
+      'userId',
+      'read',
+      'senderId',
+      'receiverId',
+      'topicId',
+      'conversationId'
+    ]
+
+    const payload = _.pick(req.query, fields)
+
+    let params = populateRequesterParams(req)({
+      type: 'list'
+    })
+
+    params = Object.assign({}, params, payload)
+
+    const result = await requester.send(params)
+    return result
+  }))
+
+  server.get({
+    name: 'message.read',
+    path: '/messages/:id'
+  }, checkPermissions([
+    'message:read',
+    'message:read:all'
+  ]), wrapAction(async (req, res) => {
+    const { id } = req.params
+
+    const params = populateRequesterParams(req)({
+      type: 'read',
+      messageId: id
+    })
+
+    const result = await requester.send(params)
+    return result
+  }))
+
+  server.post({
+    name: 'message.create',
+    path: '/messages'
+  }, checkPermissions([
+    'message:create',
+    'message:create:all'
+  ], { checkData: true }), wrapAction(async (req, res) => {
+    const fields = [
+      'topicId',
+      'conversationId',
+      'content',
+      'attachments',
+      'read',
+      'senderId',
+      'receiverId',
+      'metadata',
+      'platformData'
+    ]
+
+    const payload = _.pick(req.body, fields)
+
+    let params = populateRequesterParams(req)({
+      type: 'create'
+    })
+
+    params = Object.assign({}, params, payload)
+
+    const result = await requester.send(params)
+    return result
+  }))
+
+  server.patch({
+    name: 'message.update',
+    path: '/messages/:id'
+  }, checkPermissions([
+    'message:edit',
+    'message:edit:all'
+  ], { checkData: true }), wrapAction(async (req, res) => {
+    const { id } = req.params
+
+    const fields = [
+      'read',
+      'metadata',
+      'platformData'
+    ]
+
+    const payload = _.pick(req.body, fields)
+
+    let params = populateRequesterParams(req)({
+      type: 'update',
+      messageId: id
+    })
+
+    params = Object.assign({}, params, payload)
+
+    const result = await requester.send(params)
+    return result
+  }))
+
+  server.del({
+    name: 'message.remove',
+    path: '/messages/:id'
+  }, checkPermissions([
+    'message:remove',
+    'message:remove:all'
+  ]), wrapAction(async (req, res) => {
+    const { id } = req.params
+
+    const params = populateRequesterParams(req)({
+      type: 'remove',
+      messageId: id
+    })
+
+    const result = await requester.send(params)
+    return result
+  }))
 }
 
-function start(startParams) {
-	deps = Object.assign({}, startParams);
+function start ({ communication }) {
+  const { getRequester } = communication
 
-	const {
-		communication: { getRequester },
-	} = deps;
-
-	const configRequester = getRequester({
-		name: 'Mangopay service > Config Requester',
-		key: 'config',
-	});
-
-	const userRequester = getRequester({
-		name: 'Mangopay service > User Requester',
-		key: 'user',
-	});
-
-	const orderRequester = getRequester({
-		name: 'Mangopay service > Order Requester',
-		key: 'order',
-	});
-
-	const transactionRequester = getRequester({
-		name: 'Mangopay service > Transaction Requester',
-		key: 'transaction',
-	});
-
-	const assetRequester = getRequester({
-		name: 'Mangopay service > Transaction Requester',
-		key: 'asset',
-	});
-
-	const entryRequester = getRequester({
-		name: 'Mangopay service > Entry Requester',
-		key: 'entry',
-	});
-
-	const taskRequester = getRequester({
-		name: 'Mangopay service > Task Requester',
-		key: 'task',
-	});
-
-	Object.assign(deps, {
-		configRequester,
-		userRequester,
-		orderRequester,
-		transactionRequester,
-		assetRequester,
-		entryRequester,
-		taskRequester,
-	});
-
-	mangopay = createService(deps);
+  requester = getRequester({
+    name: 'Message route > Message Requester',
+    key: 'message'
+  })
 }
 
-function stop() {
-	const {
-		configRequester,
-		userRequester,
-		orderRequester,
-		transactionRequester,
-		assetRequester,
-		entryRequester,
-		taskRequester,
-	} = deps;
-
-	configRequester.close();
-	userRequester.close();
-	orderRequester.close();
-	transactionRequester.close();
-	assetRequester.close();
-	entryRequester.close();
-	taskRequester.close();
-
-	deps = null;
+function stop () {
+  requester.close()
+  requester = null
 }
 
 module.exports = {
-	init,
-	start,
-	stop,
-};
+  init,
+  start,
+  stop
+}
