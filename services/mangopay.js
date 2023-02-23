@@ -214,7 +214,6 @@ module.exports = function createService(deps) {
 	async function _invokeMangopayFn(mangopay, method, args, req) {
 		try {
 			// awaiting to handle error in catch block
-			console.log(mangopay, args);
 			return await _.invoke(mangopay, method, ...args); // promise
 		} catch (err) {
 			const errorMessage = 'Mangopay error';
@@ -459,6 +458,11 @@ module.exports = function createService(deps) {
 						};
 						const companyInfo = {
 							vatNumber: params.vatNumber,
+							businessName: _.get(
+								user,
+								'metadata.companyInfo.businessName',
+								'',
+							),
 						};
 
 						if (!mangopayUserId) {
@@ -489,7 +493,15 @@ module.exports = function createService(deps) {
 								};
 							} else if (userType === 'legal') {
 								userParams = {
-									HeadquartersAddress: individualInfo.address,
+									HeadquartersAddress: {
+										AddressLine1: individualInfo.address
+											.streetNumber
+											? `${individualInfo.address.address} ${individualInfo.address.streetNumber}`
+											: individualInfo.address.address,
+										City: individualInfo.address.city,
+										PostalCode: individualInfo.address.zip,
+										Country: individualInfo.address.country,
+									},
 									LegalPersonType: 'BUSINESS',
 									Name: companyInfo.businessName,
 									LegalRepresentativeBirthday:
@@ -504,9 +516,7 @@ module.exports = function createService(deps) {
 										individualInfo.lastName,
 									Email: userEmail,
 									Tag: userId,
-									CompanyNumber: Buffer.from(
-										companyInfo.vatNumber,
-									).toString('base64'),
+									CompanyNumber: companyInfo.vatNumber,
 									TermsAndConditionsAccepted: true,
 									UserCategory: 'OWNER',
 									PersonType: 'LEGAL',
@@ -805,10 +815,7 @@ module.exports = function createService(deps) {
 					}
 				}]
 			*/
-			let transaction = await _getTransaction(
-				req,
-				args[0].transactionId,
-			);
+			let transaction = await _getTransaction(req, args[0].transactionId);
 
 			if (
 				_.get(transaction, 'metadata.ip', null) === null ||
