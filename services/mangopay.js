@@ -290,8 +290,8 @@ module.exports = function createService (deps) {
           ) {
             if (args[0].UserId) {
               if (
-                args[0].UserId !== mangopayUserInfo.payer &&
-								args[0].UserId !== mangopayUserInfo.owner
+                args[0].UserId != mangopayUserInfo.payer &&
+								args[0].UserId != mangopayUserInfo.owner
               ) {
                 throw createError(403, 'Not allowed')
               }
@@ -333,8 +333,8 @@ module.exports = function createService (deps) {
               await mangopay.CardPreAuthorizations.get(args[0])
             ).AuthorId
             if (
-              authorId !== mangopayUserInfo.payer &&
-							authorId !== mangopayUserInfo.owner
+              authorId != mangopayUserInfo.payer &&
+							authorId != mangopayUserInfo.owner
             ) {
               throw createError(
                 404,
@@ -345,8 +345,8 @@ module.exports = function createService (deps) {
             const wallet = await mangopay.Wallets.get(args[0])
             const walletOwner = wallet.Owners[0]
             if (
-              walletOwner !== mangopayUserInfo.payer &&
-							walletOwner !== mangopayUserInfo.owner
+              walletOwner != mangopayUserInfo.payer &&
+							walletOwner != mangopayUserInfo.owner
             ) {
               throw createError(403, 'Not allowed')
             }
@@ -354,8 +354,8 @@ module.exports = function createService (deps) {
             const payin = await mangopay.PayIns.get(args[0])
             const payinOwner = payin.AuthorId
             if (
-              payinOwner !== mangopayUserInfo.payer &&
-							payinOwner !== mangopayUserInfo.owner
+              payinOwner != mangopayUserInfo.payer &&
+							payinOwner != mangopayUserInfo.owner
             ) {
               throw createError(403, 'Not allowed')
             }
@@ -365,8 +365,8 @@ module.exports = function createService (deps) {
           ) {
             if (Array.isArray(args)) {
               if (
-                (args[0] !== mangopayUserInfo.payer &&
-									args[0] !==
+                (args[0] != mangopayUserInfo.payer &&
+									args[0] !=
 										mangopayUserInfo.owner) ||
 								(typeof mangopayUserInfo.payer ===
 									'undefined' &&
@@ -675,8 +675,8 @@ module.exports = function createService (deps) {
       const user = await _getUser(req, getCurrentUserId(req))
       if (args[0].AuthorId) {
         if (
-          args[0].AuthorId !== mangopayUserInfo.owner.toString() ||
-					args[0].DebitedWalletId !==
+          args[0].AuthorId != mangopayUserInfo.owner.toString() ||
+					args[0].DebitedWalletId !=
 						_.get(
 						  user,
 						  'platformData._private.mangoPay.owner.walletId',
@@ -1484,7 +1484,7 @@ module.exports = function createService (deps) {
       }
 
       if (
-        args[0].userId !== currentUserId &&
+        args[0].userId != currentUserId &&
 				!req._matchedPermissions['integrations:read_write:mangopay']
       ) {
         throw createError(403, 'Cannot sponsor profile of other users')
