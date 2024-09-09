@@ -232,8 +232,8 @@ module.exports = function createService (deps) {
     }
   }
 
-  async function sendRequest (req) {
-    const { method, args = [{}] } = req
+  async function sendRequest (req) {    
+    const { method, args = [{}], rawHeaders } = req
 
     const mangopay = await _mangopayAuth(req)
 
@@ -260,6 +260,7 @@ module.exports = function createService (deps) {
       'Cards.update',
       'Cards.getTransactions',
       'Cards.getPreAuthorizations',
+      'Cards.validate',
       'CardPreAuthorizations.get',
       'Wallets.get',
       'PayIns.get',
@@ -304,6 +305,7 @@ module.exports = function createService (deps) {
           } else if (
             method === 'Cards.get' ||
 						method === 'Cards.update' ||
+            method === 'Cards.validate' ||
 						method === 'Cards.getTransactions' ||
 						method === 'Cards.getPreAuthorizations'
           ) {
@@ -702,6 +704,19 @@ module.exports = function createService (deps) {
       } else {
         throw createError(400, 'Mangopay args not acceptable')
       }
+    }
+
+    if (method === 'Cards.validate') {
+      const acceptHeader = rawHeaders.accept;
+
+      args[1].BrowserInfo = { 
+        AcceptHeader: acceptHeader,
+        JavascriptEnabled: true,
+        UserAgent: req._userAgent || rawHeaders['user-agent'],
+        ...args[1].BrowserInfo,
+      }
+
+      console.log('VALIDATE ARGS: ', args)
     }
 
     return await _invokeMangopayFn(mangopay, method, args, req)

@@ -17,7 +17,7 @@ function init(server, { middlewares, helpers } = {}) {
 			let ctx = getRequestContext(req);
 
 			const { args, method } = req.body;
-			ctx = Object.assign({}, ctx, { args, method });
+			ctx = Object.assign({}, ctx, { args, method, rawHeaders: req.headers });
 
 			return mangopay.sendRequest(ctx);
 		}),
